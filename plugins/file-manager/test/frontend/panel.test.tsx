@@ -80,13 +80,14 @@ const STATE = {
     showHiddenFiles: false,
     confirmOnDelete: true,
     restoreLastFolder: true,
+    openThreadWorkspace: false,
     sortField: "name" as const,
     sortDirection: "asc" as const,
     viewMode: "list" as const,
   },
   chunkSizeBytes: 8 * 1024 * 1024,
   maxListEntries: 5000,
-  archiveSupport: { zip: true, tar: true, sevenZip: false },
+  archiveSupport: { zip: true, tar: true, sevenZip: false, rar: false },
   pluginVersion: "0.1.0",
   primaryHostId: HOST_ID,
 };
@@ -105,6 +106,13 @@ function rpcFor(entriesByPath: Record<string, ReturnType<typeof listing>>, extra
       if (found === undefined) throw new Error(`not_found: ${input.path}`);
       return found;
     },
+    readTextFile: (input) => ({
+      path: input.path,
+      text: "# readme\n",
+      sizeBytes: 9,
+      readBytes: 9,
+      truncated: false,
+    }),
     savePreferences: () => ({
       startFolder: ROOT,
       preferences: STATE.preferences,
@@ -483,9 +491,11 @@ describe("FileManagerPanel navigation (§8.2)", () => {
     expect(clicked).toHaveLength(0);
   });
 
-  it("falls back to downloading when the host declines the preview", async () => {
-    // A client with no preview surface answers false; the file still has to
-    // arrive somehow, which is what double-click did before 0.7.
+  it("opens the built-in viewer when the host declines the preview (§8.12)", async () => {
+    // The surface the sidebar's own File Manager page always is: bb wires no
+    // preview panel into it, so the host answers false for every file.
+    // Downloading was 0.7's answer and it was the wrong one — the user asked
+    // to look at the file, not to keep a copy of it.
     const clicked: string[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
       this: HTMLAnchorElement,
@@ -502,12 +512,11 @@ describe("FileManagerPanel navigation (§8.2)", () => {
       slot.getAllByTestId("fm-row").find((row) => row.getAttribute("data-fm-path") === README.path)!,
     );
 
-    expect(clicked).toHaveLength(1);
-    expect(clicked[0]).toContain("/api/v1/plugins/file-manager/http/download?path=");
-    expect(clicked[0]).toContain(encodeURIComponent(README.path));
+    await slot.findByTestId("fm-viewer");
+    expect(clicked).toHaveLength(0);
   });
 
-  it("downloads instead of previewing when the server could not name its host", async () => {
+  it("shows the viewer when the server could not name its host", async () => {
     const clicked: string[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
       this: HTMLAnchorElement,
@@ -529,8 +538,10 @@ describe("FileManagerPanel navigation (§8.2)", () => {
       slot.getAllByTestId("fm-row").find((row) => row.getAttribute("data-fm-path") === README.path)!,
     );
 
+    // Without a host id there is no target to hand bb, so it is never asked.
     expect(slot.inspection.navigateCalls).toHaveLength(0);
-    expect(clicked).toHaveLength(1);
+    await slot.findByTestId("fm-viewer");
+    expect(clicked).toHaveLength(0);
   });
 
   it("refuses a link that leaves the root, without previewing or downloading", async () => {

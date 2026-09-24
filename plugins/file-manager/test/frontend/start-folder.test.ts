@@ -47,6 +47,7 @@ describe("saveStartFolder", () => {
         showHiddenFiles: false,
         confirmOnDelete: true,
         restoreLastFolder: true,
+        openThreadWorkspace: false,
         sortField: "name",
         sortDirection: "asc",
         viewMode: "list",

@@ -77,6 +77,7 @@ const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
   restoreLastFolder: true,
+  openThreadWorkspace: false,
   sortField: "name" as const,
   sortDirection: "asc" as const,
 };
@@ -106,7 +107,7 @@ function baseRpc(
       preferences: PREFERENCES,
       chunkSizeBytes: 8 * 1024 * 1024,
       maxListEntries: 5000,
-      archiveSupport: { zip: true, tar: true, sevenZip: false },
+      archiveSupport: { zip: true, tar: true, sevenZip: false, rar: false },
       pluginVersion: "0.1.0",
       primaryHostId: HOST_ID,
     }),

@@ -38,18 +38,22 @@ export const DOWNLOAD_URL = `${HTTP_BASE}/download`;
  * bb matches an opener by exact extension — there is no wildcard, and a name
  * with no extension at all (`Makefile`, `LICENSE`) gets no "Open with" rows
  * from any plugin — so this list is simply "what a link in a message
- * plausibly points at": text, docs, office, config, data, code, web, images,
+ * plausibly points at": text, docs, ebooks, config, data, code, web, images,
  * audio, video, archives, fonts and binaries.
  *
- * `pdf` is deliberately absent: the pdf-viewer plugin owns it, and two plugins
- * claiming one extension makes bb's automatic pick depend on load order.
+ * Documents are deliberately absent: `pdf`, the Word, Excel and PowerPoint
+ * formats (`doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`), their OpenDocument
+ * twins (`odt`, `ods`, `odp`) and `rtf` all belong to the pdf-viewer plugin,
+ * which renders them. bb's automatic pick is the FIRST matching opener in
+ * plugin-id order, and `file-manager` sorts before `pdf-viewer` — so claiming
+ * any of them here would shadow the viewer with a reveal strip over bb's own
+ * preview, which cannot render an office file at all.
  */
 export const LOCATION_OPENER_EXTENSIONS = [
   // text and docs
-  "md", "mdx", "markdown", "txt", "rst", "adoc", "org", "tex", "rtf",
-  // office and ebooks
-  "doc", "docx", "odt", "xls", "xlsx", "ods", "ppt", "pptx", "odp", "epub",
-  "pages", "numbers", "key",
+  "md", "mdx", "markdown", "txt", "rst", "adoc", "org", "tex",
+  // ebooks and Apple's office formats (the pdf-viewer does not read these)
+  "epub", "pages", "numbers", "key",
   // config and data
   "json", "jsonc", "json5", "yaml", "yml", "toml", "ini", "cfg", "conf", "env",
   "csv", "tsv", "xml", "sql", "log", "lock", "properties", "plist", "db",
@@ -70,8 +74,8 @@ export const LOCATION_OPENER_EXTENSIONS = [
   // audio and video
   "mp3", "wav", "flac", "aac", "ogg", "oga", "m4a", "opus", "aiff",
   "mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "mpg", "mpeg",
-  // archives — the plugin extracts several of these itself
-  "zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "7z", "rar", "zst",
+  // archives — the plugin lists and extracts several of these itself (§8.13)
+  "zip", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "7z", "rar", "zst",
   "lz4", "iso", "dmg", "jar", "war", "whl", "gem", "crate", "nupkg", "xpi",
   "vsix", "apk", "aab", "ipa", "deb", "rpm", "pkg", "msi", "appimage", "snap",
   "flatpak", "cab",
@@ -124,8 +128,45 @@ export const archiveFormatSchema = z.enum([
   "tar.bz2",
   "tar.xz",
   "7z",
+  "rar",
 ]);
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;
+
+/**
+ * Name → archive format, longest suffix first: `.tar.gz` must win over a
+ * `.gz`-style single match.
+ *
+ * Shared because both halves ask the question. The backend marks listing rows
+ * with it and picks an extractor or a lister by it; the file opener asks it of
+ * a link's name to decide between bb's own preview and the archive's contents
+ * (§10.2), before anything has been resolved on the server.
+ */
+const ARCHIVE_SUFFIXES: ReadonlyArray<readonly [string, ArchiveFormat]> = [
+  [".tar.gz", "tar.gz"],
+  [".tar.bz2", "tar.bz2"],
+  [".tar.xz", "tar.xz"],
+  [".tgz", "tar.gz"],
+  [".tbz2", "tar.bz2"],
+  [".tbz", "tar.bz2"],
+  [".txz", "tar.xz"],
+  [".zip", "zip"],
+  [".tar", "tar"],
+  [".7z", "7z"],
+  [".rar", "rar"],
+];
+
+/**
+ * The archive format a file name announces, or `null`. By name only, never
+ * by content — see `entrySchema.archiveFormat`.
+ */
+export function detectArchiveFormat(name: string): ArchiveFormat | null {
+  const lower = name.toLowerCase();
+  for (const [suffix, format] of ARCHIVE_SUFFIXES) {
+    // A name that is *only* the extension (".zip") is a dotfile, not an archive.
+    if (lower.length > suffix.length && lower.endsWith(suffix)) return format;
+  }
+  return null;
+}
 
 export const sortFieldSchema = z.enum(["name", "size", "modified", "kind"]);
 export const sortDirectionSchema = z.enum(["asc", "desc"]);
@@ -144,6 +185,27 @@ export type ViewMode = z.infer<typeof viewModeSchema>;
  * shortly before it lapses (hooks/usePreviewBase.ts).
  */
 export const PREVIEW_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Hard cap on what `readTextFile` returns, in bytes.
+ *
+ * The built-in viewer (§8.12) reads text over RPC rather than over the byte
+ * routes, because it needs the *whole* string in the page to hand to a
+ * renderer. One mebibyte is far more than anyone reads in a dialog and small
+ * enough that a stray click on a 4 GB log costs one bounded read; past it the
+ * viewer says how much it is showing and offers the download.
+ */
+export const MAX_TEXT_PREVIEW_BYTES = 1024 * 1024;
+
+/**
+ * How many members `listArchive` hands back (§8.13).
+ *
+ * An archive's table of contents becomes a tree the page builds and paints,
+ * so this is what keeps a 400 000-file backup from becoming a 400 000-row
+ * page. Members past it are still *counted* — the summary line describes the
+ * whole archive — they are just not sent.
+ */
+export const MAX_ARCHIVE_ENTRIES = 10_000;
 
 /**
  * Stable error codes. Handlers throw `Error` whose message is exactly
@@ -240,6 +302,19 @@ export const preferencesSchema = z.strictObject({
    * later.
    */
   restoreLastFolder: z.boolean(),
+  /**
+   * Open a thread panel tab in that thread's own project folder — the
+   * environment checkout `threadWorkspace` reports — instead of the
+   * remembered or configured folder (v0.9.1).
+   *
+   * It rides with the other bootstrap-tick preferences for the reason
+   * `restoreLastFolder` documents above: the panel decides where to open in
+   * the tick `getState` lands, and a second async source racing it would
+   * either delay the first listing or open one folder and jump a moment
+   * later. Surfaces bb gives no thread — the nav panel, the New thread
+   * launcher, the file openers — ignore it: there is no thread to be in.
+   */
+  openThreadWorkspace: z.boolean(),
   sortField: sortFieldSchema,
   sortDirection: sortDirectionSchema,
   /**
@@ -368,6 +443,84 @@ export const directorySizeSchema = z.strictObject({
   elapsedMs: z.number(),
 });
 export type DirectorySize = z.infer<typeof directorySizeSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Archive contents (§8.13)                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What one archive member is. `hardlink` is tar's: a second name for a member
+ * stored earlier in the same archive, which carries no bytes of its own.
+ */
+export const archiveEntryKindSchema = z.enum(["file", "directory", "symlink", "hardlink", "other"]);
+export type ArchiveEntryKind = z.infer<typeof archiveEntryKindSchema>;
+
+/** One member of an archive, as the archive's own table of contents has it. */
+export const archiveEntrySchema = z.strictObject({
+  /**
+   * The member's path inside the archive: `/`-separated, decoded for display.
+   * Never a filesystem path — `../evil` and `/etc/passwd` are shown exactly as
+   * the archive spells them, and nothing is ever done with them.
+   */
+  path: z.string(),
+  kind: archiveEntryKindSchema,
+  /** Uncompressed size; 0 for folders and hard links. */
+  sizeBytes: z.number(),
+  /** Null when the format recorded no usable time for this member. */
+  modifiedAtMs: z.number().nullable(),
+  /** True when the format marks the member as password-protected. */
+  encrypted: z.boolean(),
+  /** Where a symlink or hard link points, as recorded; null when unknown. */
+  linkTarget: z.string().nullable(),
+});
+export type ArchiveEntry = z.infer<typeof archiveEntrySchema>;
+
+/**
+ * Why a listing stopped before the end of the archive.
+ *
+ * `entries`, `time` and `output` are the scan's own bounds (src/archive-listing.ts);
+ * `damaged` means the archive itself ended early or stopped making sense, and
+ * `problem` then says what the reader complained about.
+ */
+export const archiveStopReasonSchema = z.enum(["entries", "time", "output", "damaged"]);
+export type ArchiveStopReason = z.infer<typeof archiveStopReasonSchema>;
+
+/** The table of contents of one archive (§8.13). */
+export const archiveListingSchema = z.strictObject({
+  /** The realpath'ed archive, echoed back. */
+  path: z.string(),
+  format: archiveFormatSchema,
+  /** Size of the archive file itself, on disk. */
+  archiveSizeBytes: z.number(),
+  /** The first `MAX_ARCHIVE_ENTRIES` members, in the archive's own order. */
+  entries: z.array(archiveEntrySchema),
+  /** Members the scan saw: all of them unless `partial`. */
+  totalEntries: z.number().int(),
+  /** Members that are not folders — files and links. */
+  fileCount: z.number().int(),
+  /** Distinct folders, including the ones only implied by a member's path. */
+  directoryCount: z.number().int(),
+  /** Sum of `sizeBytes` over every member the scan saw. */
+  uncompressedBytes: z.number(),
+  /** Members the format marks as encrypted. */
+  encryptedCount: z.number().int(),
+  /** True when `entries` holds fewer members than the archive does. */
+  truncated: z.boolean(),
+  /** True when the scan stopped early, so every count above is a lower bound. */
+  partial: z.boolean(),
+  /** Why the scan stopped early; null when it read the whole table. */
+  stoppedBy: archiveStopReasonSchema.nullable(),
+  /** The reader's own complaint for `damaged`; null otherwise. */
+  problem: z.string().nullable(),
+  /**
+   * True when `extractArchive` can unpack this format on this host, so a
+   * surface can offer "Extract…" without a second round trip to find out.
+   */
+  extractable: z.boolean(),
+});
+export type ArchiveListing = z.infer<typeof archiveListingSchema>;
+
+/* ------------------------------------------------------------------ */
 /* Bookmarks (§8.11)                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -424,6 +577,12 @@ export const fileManagerContract = defineRpcContract({
         zip: z.boolean(),
         tar: z.boolean(),
         sevenZip: z.boolean(),
+        /**
+         * 7z *lists* any RAR, but only a build that carries the RAR codec can
+         * unpack one — Debian's `7zip` ships without it (`7zip-rar` adds it).
+         * Probed once at load from `7z i`.
+         */
+        rar: z.boolean(),
       }),
       pluginVersion: z.string(),
       /**
@@ -523,6 +682,56 @@ export const fileManagerContract = defineRpcContract({
       /** Wall-clock expiry; the panel renews shortly before it. */
       expiresAtMs: z.number().int(),
     }),
+  },
+
+  /**
+   * The text of one file, capped, for the built-in viewer (§8.12).
+   *
+   * The counterpart of `createPreviewUrl`: images, PDFs and media are *shown*
+   * from a URL and never travel through JS, while text has to be a string in
+   * the page before bb's Markdown or source renderer can take it.
+   *
+   * "Is this text?" is answered here rather than from the file name, because
+   * the names that carry no extension — `Makefile`, `LICENSE`, `.gitignore` —
+   * are exactly the ones a viewer must still open. A NUL byte in the read
+   * window, or bytes that are not valid UTF-8, throw `unsupported`; the viewer
+   * turns that into "no preview" plus a download button.
+   */
+  readTextFile: {
+    input: z.strictObject({
+      /** Absolute path, or a path relative to root. */
+      path: z.string(),
+    }),
+    output: z.strictObject({
+      /** The realpath'ed file, echoed back. */
+      path: z.string(),
+      /** Decoded UTF-8, at most `MAX_TEXT_PREVIEW_BYTES` of it. */
+      text: z.string(),
+      /** Size of the whole file, so the viewer can say what it left out. */
+      sizeBytes: z.number().int(),
+      /** Bytes actually decoded into `text`. */
+      readBytes: z.number().int(),
+      /** True when the file is longer than what `text` holds. */
+      truncated: z.boolean(),
+    }),
+  },
+
+  /**
+   * What is inside one archive, without extracting it (§8.13).
+   *
+   * The third way the panel gets at a file's contents, beside
+   * `createPreviewUrl` and `readTextFile`: a zip's central directory is read
+   * in-process, tar and 7z/rar are asked through `tar -tv` and `7z l`, and
+   * nothing is ever written anywhere. Bounded three ways — members returned,
+   * members scanned, wall clock — and says so rather than hanging on a
+   * multi-gigabyte `.tar.xz`.
+   */
+  listArchive: {
+    input: z.strictObject({
+      /** Absolute path, or a path relative to root. */
+      path: z.string(),
+    }),
+    output: archiveListingSchema,
   },
 
   /**
@@ -721,6 +930,7 @@ export const fileManagerContract = defineRpcContract({
   savePreferences: {
     input: z.strictObject({
       startFolder: z.string().optional(),
+      openThreadWorkspace: z.boolean().optional(),
       showHiddenFiles: z.boolean().optional(),
       confirmOnDelete: z.boolean().optional(),
       sortField: sortFieldSchema.optional(),

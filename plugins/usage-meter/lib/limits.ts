@@ -119,7 +119,7 @@ export function dayText(at: Date): string {
   return DATE_FORMAT.format(at).replace(/\.$/, "");
 }
 
-/** "resets at 17:20" for a reset today, "resets 24 Aug" for the rest. */
+/** "resets at 17:20" for a reset today, "resets 24 Aug at 01:30" for the rest. */
 export function resetText(iso: string | null): string {
   if (!iso) return "";
   const exact = new Date(iso);
@@ -127,9 +127,11 @@ export function resetText(iso: string | null): string {
   // The API returns a time with seconds (…14:19:59.781Z). Round to the minute,
   // or "resets at 17:19" looks like it is off by one.
   const at = new Date(Math.round(exact.getTime() / 60_000) * 60_000);
-  return isToday(at)
-    ? `resets at ${TIME_FORMAT.format(at)}`
-    : `resets ${dayText(at)}`;
+  const time = TIME_FORMAT.format(at);
+  // The date alone is not an answer to "when does this free up again": a session
+  // that rolls past midnight resets in the small hours, and "resets 4 Sep" reads
+  // as a whole day away. The clock stays, the day is what gets added.
+  return isToday(at) ? `resets at ${time}` : `resets ${dayText(at)} at ${time}`;
 }
 
 /** "Figures as of 16:48" — the age of the last successful snapshot. */

@@ -59,6 +59,7 @@ const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
   restoreLastFolder: true,
+  openThreadWorkspace: false,
   sortField: "name" as const,
   sortDirection: "asc" as const,
   viewMode: "list" as const,
@@ -89,11 +90,18 @@ function baseRpc(
       preferences: PREFERENCES,
       chunkSizeBytes: 8 * 1024 * 1024,
       maxListEntries: 5000,
-      archiveSupport: { zip: true, tar: true, sevenZip: false },
+      archiveSupport: { zip: true, tar: true, sevenZip: false, rar: false },
       pluginVersion: "0.1.0",
       primaryHostId: HOST_ID,
     }),
     listDir: (input) => listingFor(input.path),
+    readTextFile: (input) => ({
+      path: input.path,
+      text: "hello",
+      sizeBytes: 5,
+      readBytes: 5,
+      truncated: false,
+    }),
     savePreferences: () => ({
       startFolder: ROOT,
       preferences: PREFERENCES,
@@ -193,7 +201,10 @@ describe("keyboard map (§8.3)", () => {
     expect(selectedNames(slot)).toEqual(["docs", "a.txt", "b.txt", "c.txt"]);
   });
 
-  it("opens a directory and downloads a file with Enter", async () => {
+  it("opens a directory and shows a file with Enter", async () => {
+    // This host declines previews, which is what the sidebar's own File
+    // Manager page always does (§8.12) — so the file lands in the built-in
+    // viewer rather than in the downloads folder.
     const clicked: string[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
       this: HTMLAnchorElement,
@@ -211,8 +222,8 @@ describe("keyboard map (§8.3)", () => {
 
     fireEvent.click(rowFor(slot, A.path));
     press(panel, { key: "Enter" });
-    expect(clicked).toHaveLength(1);
-    expect(clicked[0]).toContain(encodeURIComponent(A.path));
+    await slot.findByTestId("fm-viewer");
+    expect(clicked).toHaveLength(0);
   });
 
   it("goes to the parent with Backspace and with Alt+ArrowLeft", async () => {
@@ -368,7 +379,7 @@ describe("Space — quick look (§8.9)", () => {
     ]);
   });
 
-  it("never downloads when the host declines: a peek is not a download", async () => {
+  it("shows the file in the built-in viewer when the host declines", async () => {
     const clicked: string[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
       this: HTMLAnchorElement,
@@ -382,10 +393,9 @@ describe("Space — quick look (§8.9)", () => {
     fireEvent.click(rowFor(slot, A.path));
     press(slot.getByTestId("fm-panel"), { key: " " });
 
+    // Still the rule that survives from 0.7: a peek never downloads.
+    await slot.findByTestId("fm-viewer");
     expect(clicked).toHaveLength(0);
-    // Enter on the same row still downloads — that is the difference.
-    press(slot.getByTestId("fm-panel"), { key: "Enter" });
-    expect(clicked).toHaveLength(1);
   });
 
   it("does not open a folder — that is Enter's job", async () => {

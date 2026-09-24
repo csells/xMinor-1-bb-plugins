@@ -15,7 +15,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Job } from "../../contract";
 import {
   archiveBaseName,
+  canExtractFormat,
   createArchives,
+  hasRarCodec,
   probeExecutables,
   supportFrom,
   type ArchivesModule,
@@ -171,7 +173,37 @@ describe("capability probe", () => {
     expect(archiveBaseName("backup.TGZ")).toBe("backup");
     expect(archiveBaseName("bundle.zip")).toBe("bundle");
     expect(archiveBaseName("things.7z")).toBe("things");
+    expect(archiveBaseName("scans.rar")).toBe("scans");
     expect(archiveBaseName("plain")).toBe("plain");
+  });
+
+  it("reads the RAR codec off `7z i`, whatever the other columns look like", () => {
+    const withCodec = [
+      "Formats:",
+      " 0  ...F..........  Rar      rar r00       R a r ! 1A 07 00",
+      "",
+      "Codecs:",
+      " 0  ED     30101 LZMA",
+      " 1  ED     40305 Rar5",
+      "",
+      "Hashers:",
+      "      4        1 CRC32",
+    ].join("\n");
+    // Debian's `7zip`: the Rar *format* is listed, the codec is not.
+    const withoutCodec = withCodec.replace(" 1  ED     40305 Rar5\n", "");
+    expect(hasRarCodec(withCodec)).toBe(true);
+    expect(hasRarCodec(withoutCodec)).toBe(false);
+    expect(hasRarCodec("")).toBe(false);
+  });
+
+  it("offers RAR extraction only with 7z *and* its RAR codec", () => {
+    const base = { tar: "/usr/bin/tar", unzip: null };
+    expect(supportFrom({ ...base, sevenZip: "/usr/bin/7z", sevenZipRar: true }).rar).toBe(true);
+    expect(supportFrom({ ...base, sevenZip: "/usr/bin/7z", sevenZipRar: false }).rar).toBe(false);
+    expect(supportFrom({ ...base, sevenZip: null, sevenZipRar: true }).rar).toBe(false);
+    expect(canExtractFormat("rar", { ...base, sevenZip: "/usr/bin/7z", sevenZipRar: false })).toBe(false);
+    expect(canExtractFormat("7z", { ...base, sevenZip: "/usr/bin/7z", sevenZipRar: false })).toBe(true);
+    expect(canExtractFormat("zip", { ...base, sevenZip: null, sevenZipRar: false })).toBe(false);
   });
 });
 
@@ -329,10 +361,10 @@ describe("extractArchive", () => {
   });
 
   it("rejects an unsupported extension and a non-file source", async () => {
-    await writeFile(path.join(root, "notes.rar"), "not really a rar");
+    await writeFile(path.join(root, "notes.arj"), "not an archive we know");
     await expect(
       archives.extractArchive({
-        archivePath: path.join(root, "notes.rar"),
+        archivePath: path.join(root, "notes.arj"),
         destinationDir: null,
         createSubfolder: true,
         conflict: "rename",
@@ -356,6 +388,51 @@ describe("extractArchive", () => {
         conflict: "rename",
       }),
     ).rejects.toThrow(/^path_escape: /u);
+  });
+});
+
+describe("rar", () => {
+  it("refuses up front when 7z cannot unpack RAR data", async () => {
+    await writeFile(path.join(root, "scans.rar"), "Rar!");
+    const codecless = await createArchives(host.bb, {
+      jobs,
+      executables: { tar: "/usr/bin/tar", unzip: null, sevenZip: "/usr/bin/7z", sevenZipRar: false },
+    });
+
+    await expect(
+      codecless.extractArchive({
+        archivePath: path.join(root, "scans.rar"),
+        destinationDir: null,
+        createSubfolder: true,
+        conflict: "rename",
+      }),
+    ).rejects.toThrow(/^unsupported_archive: scans\.rar \(no extractor for rar/u);
+  });
+
+  it("runs 7z's extraction plan when the codec is there", async () => {
+    await writeFile(path.join(root, "scans.rar"), "Rar!");
+    const seen: { command: string; args: readonly string[] }[] = [];
+    const withCodec = await createArchives(host.bb, {
+      jobs,
+      executables: { tar: "/usr/bin/tar", unzip: null, sevenZip: "/opt/7zz", sevenZipRar: true },
+      spawnExtractor: (command, args) => {
+        seen.push({ command, args });
+        const child = new FakeChild();
+        setImmediate(() => child.emit("close", 0, null));
+        return child as unknown as ExtractorProcess;
+      },
+    });
+
+    await withCodec.extractArchive({
+      archivePath: path.join(root, "scans.rar"),
+      destinationDir: null,
+      createSubfolder: true,
+      conflict: "rename",
+    });
+    await withCodec.idle();
+
+    expect(seen[0]?.command).toBe("/opt/7zz");
+    expect(seen[0]?.args.slice(0, 3)).toEqual(["x", "-y", "-bd"]);
   });
 });
 

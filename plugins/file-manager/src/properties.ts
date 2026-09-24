@@ -108,6 +108,7 @@ const ARCHIVE_CONTENT_TYPES: Readonly<Record<ArchiveFormat, string>> = {
   "tar.bz2": "application/x-bzip2",
   "tar.xz": "application/x-xz",
   "7z": "application/x-7z-compressed",
+  rar: "application/vnd.rar",
 };
 
 /** `null` when the name says nothing useful — `Makefile`, `.bashrc`, `LICENSE`. */

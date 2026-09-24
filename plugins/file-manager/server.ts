@@ -23,7 +23,7 @@ import { createUploads } from "./src/uploads";
 import { registerHttpRoutes } from "./src/http-routes";
 
 /** Kept in sync with package.json#version by hand, like the first-party plugins. */
-export const PLUGIN_VERSION = "0.7.3";
+export const PLUGIN_VERSION = "0.9.1";
 export const PLUGIN_NAME = "File Manager";
 
 /** §5.2: hourly sweep of upload sessions whose part file is older than 24 h. */
@@ -64,6 +64,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     pluginVersion: PLUGIN_VERSION,
     transfer: {
       extractArchive: archives.extractArchive,
+      listArchive: archives.listArchive,
       jobStatus: jobs.jobStatus,
       jobCancel: jobs.jobCancel,
       uploadCreate: uploads.uploadCreate,
@@ -80,7 +81,8 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
 
   bb.log.info(
     `${PLUGIN_NAME} ${PLUGIN_VERSION} loaded — root ${root}` +
-      ` (zip:${archiveSupport.zip} tar:${archiveSupport.tar} 7z:${archiveSupport.sevenZip})`,
+      ` (zip:${archiveSupport.zip} tar:${archiveSupport.tar} 7z:${archiveSupport.sevenZip}` +
+      ` rar:${archiveSupport.rar})`,
   );
 
   bb.onDispose(() => {
@@ -106,7 +108,10 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
  *   src/jobs.ts        createJobs(bb) -> { jobStatus, jobCancel }
  *                      (handlers matching the contract methods of the same name)
  *   src/archives.ts    createArchives(bb, { jobs, settings })
- *                        -> { extractArchive, support: { zip, tar, sevenZip } }
+ *                        -> { extractArchive, listArchive,
+ *                             support: { zip, tar, sevenZip, rar } }
+ *                      (listArchive is src/archive-listing.ts, built on the
+ *                      same executable probe — §8.13)
  *   src/uploads.ts     createUploads(bb, { settings })
  *                        -> { uploadCreate, uploadStatus, uploadFinish,
  *                             uploadAbort, sweep() }

@@ -25,6 +25,8 @@ export interface ArchiveSupport {
   zip: boolean;
   tar: boolean;
   sevenZip: boolean;
+  /** 7z with the RAR codec: every 7z lists a RAR, not every 7z unpacks one. */
+  rar: boolean;
 }
 
 export interface ExtractSubmission {
@@ -47,6 +49,7 @@ export interface ExtractDialogProps {
 export function isFormatSupported(format: ArchiveFormat, support: ArchiveSupport): boolean {
   if (format === "zip") return support.zip || support.sevenZip;
   if (format === "7z") return support.sevenZip;
+  if (format === "rar") return support.rar;
   return support.tar;
 }
 

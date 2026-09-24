@@ -42,6 +42,16 @@ export const settingsDescriptors = {
       "forget the remembered folder, and whenever the last folder is gone.",
     default: true,
   },
+  openThreadWorkspace: {
+    type: "boolean",
+    label: "Open the thread's project folder",
+    description:
+      "When the File Manager is opened as a tab in a thread's side panel, start " +
+      "in that thread's project folder (its environment checkout) instead of the " +
+      "remembered or start folder. Threads with no environment, no folder on disk, " +
+      "or a folder outside the hard root fall back to the usual choice.",
+    default: false,
+  },
   showHiddenFiles: {
     type: "boolean",
     label: "Show hidden files",
@@ -87,6 +97,7 @@ export const settingsDescriptors = {
 export interface FileManagerSettingsValues {
   startFolder: string;
   restoreLastFolder: boolean;
+  openThreadWorkspace: boolean;
   showHiddenFiles: boolean;
   confirmOnDelete: boolean;
   sortField: string;
@@ -98,6 +109,7 @@ export interface FileManagerSettingsValues {
 /** Input of the `savePreferences` RPC method (all keys optional). */
 export interface SavePreferencesInput {
   startFolder?: string | undefined;
+  openThreadWorkspace?: boolean | undefined;
   showHiddenFiles?: boolean | undefined;
   confirmOnDelete?: boolean | undefined;
   sortField?: "name" | "size" | "modified" | "kind" | undefined;
@@ -138,6 +150,7 @@ function toPreferences(values: FileManagerSettingsValues): Preferences {
     showHiddenFiles: values.showHiddenFiles,
     confirmOnDelete: values.confirmOnDelete,
     restoreLastFolder: values.restoreLastFolder,
+    openThreadWorkspace: values.openThreadWorkspace,
     sortField: sortField.success ? sortField.data : "name",
     sortDirection: sortDirection.success ? sortDirection.data : "asc",
     viewMode: viewMode.success ? viewMode.data : "list",
@@ -187,6 +200,9 @@ export async function createSettings(bb: BbPluginApi): Promise<SettingsModule> {
       if (input.startFolder !== undefined) {
         // Store the realpath'ed, validated form so a later read cannot escape.
         values.startFolder = await validateStartFolder(input.startFolder);
+      }
+      if (input.openThreadWorkspace !== undefined) {
+        values.openThreadWorkspace = input.openThreadWorkspace;
       }
       if (input.showHiddenFiles !== undefined) values.showHiddenFiles = input.showHiddenFiles;
       if (input.confirmOnDelete !== undefined) values.confirmOnDelete = input.confirmOnDelete;

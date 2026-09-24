@@ -10,7 +10,7 @@ import {
   MAX_LIST_ENTRIES,
   MAX_SEARCH_RESULTS,
   STAGING_DIR_NAME,
-  type ArchiveFormat,
+  detectArchiveFormat,
   type EntryKind,
   type FileEntry,
 } from "../contract";
@@ -29,29 +29,10 @@ import {
 /* Archive detection (by extension only — see entrySchema.archiveFormat) */
 /* ------------------------------------------------------------------ */
 
-/** Longest suffix first: `.tar.gz` must win over `.gz`-style single matches. */
-const ARCHIVE_EXTENSIONS: ReadonlyArray<readonly [string, ArchiveFormat]> = [
-  [".tar.gz", "tar.gz"],
-  [".tar.bz2", "tar.bz2"],
-  [".tar.xz", "tar.xz"],
-  [".tgz", "tar.gz"],
-  [".tbz2", "tar.bz2"],
-  [".tbz", "tar.bz2"],
-  [".txz", "tar.xz"],
-  [".zip", "zip"],
-  [".tar", "tar"],
-  [".7z", "7z"],
-];
-
-/** `null` when the name does not end in a supported archive extension. */
-export function detectArchiveFormat(name: string): ArchiveFormat | null {
-  const lower = name.toLowerCase();
-  for (const [suffix, format] of ARCHIVE_EXTENSIONS) {
-    // A name that is *only* the extension (".zip") is a dotfile, not an archive.
-    if (lower.length > suffix.length && lower.endsWith(suffix)) return format;
-  }
-  return null;
-}
+// The suffix table lives in contract.ts since v0.9: the file opener needs the
+// same answer in the page, before the server has resolved anything (§10.2).
+// Re-exported so the backend keeps asking this module, as it always has.
+export { detectArchiveFormat };
 
 /* ------------------------------------------------------------------ */
 /* Entry mapping                                                       */

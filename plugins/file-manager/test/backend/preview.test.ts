@@ -1,5 +1,8 @@
 // §8.9 — the gallery's base URL, and the two things that must not leak out of
 // it: a folder outside the hard root, and a host failure dressed up as a bug.
+//
+// §8.12 — plus `readTextFile`, the other half of the same module: the same
+// clamp, and one question the file name cannot answer — are these bytes text?
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,9 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
-import { PREVIEW_TTL_MS } from "../../contract";
+import { MAX_TEXT_PREVIEW_BYTES, PREVIEW_TTL_MS } from "../../contract";
 import { isFileManagerError } from "../../src/errors";
-import { createPreviewUrl } from "../../src/preview";
+import { createPreviewUrl, readTextFile } from "../../src/preview";
 import { initRoot } from "../../src/root";
 
 let root = "";
@@ -135,5 +138,96 @@ describe("createPreviewUrl", () => {
     await expectCode(createPreviewUrl(host.bb, { path: "" }), "unsupported");
     expect(host.warnings).toHaveLength(1);
     expect(host.warnings[0]).toContain(root);
+  });
+});
+
+describe("readTextFile", () => {
+  it("returns the whole file when it fits under the cap", async () => {
+    await writeFile(path.join(root, "notes.md"), "# Title\n\nBody\n", "utf8");
+
+    const result = await readTextFile({ path: path.join(root, "notes.md") });
+
+    expect(result).toEqual({
+      path: path.join(root, "notes.md"),
+      text: "# Title\n\nBody\n",
+      sizeBytes: 14,
+      readBytes: 14,
+      truncated: false,
+    });
+  });
+
+  it("reads a name with no extension at all", async () => {
+    // The reason the kind is decided from bytes and not from the name:
+    // `Makefile`, `LICENSE` and `.gitignore` are exactly what people open.
+    await writeFile(path.join(root, "Makefile"), "all:\n\techo hi\n", "utf8");
+    const result = await readTextFile({ path: path.join(root, "Makefile") });
+    expect(result.text).toContain("echo hi");
+  });
+
+  it("reads an empty file as an empty string, not as a failure", async () => {
+    await writeFile(path.join(root, "empty.txt"), "");
+    const result = await readTextFile({ path: path.join(root, "empty.txt") });
+    expect(result).toMatchObject({ text: "", sizeBytes: 0, truncated: false });
+  });
+
+  it("caps a long file and says so", async () => {
+    const line = "x".repeat(1023) + "\n";
+    const size = MAX_TEXT_PREVIEW_BYTES + 4096;
+    await writeFile(path.join(root, "big.log"), line.repeat(Math.ceil(size / line.length)), "utf8");
+
+    const result = await readTextFile({ path: path.join(root, "big.log") });
+
+    expect(result.truncated).toBe(true);
+    expect(result.sizeBytes).toBeGreaterThan(MAX_TEXT_PREVIEW_BYTES);
+    expect(result.readBytes).toBeLessThanOrEqual(MAX_TEXT_PREVIEW_BYTES);
+    expect(result.text.length).toBeGreaterThan(0);
+  });
+
+  it("does not choke on a multi-byte character split by the cap", async () => {
+    // Two bytes per `é`, so an odd cap lands mid-character; the decoder drops
+    // the stump rather than declaring the whole file binary.
+    const body = "é".repeat(MAX_TEXT_PREVIEW_BYTES);
+    await writeFile(path.join(root, "accents.txt"), body, "utf8");
+
+    const result = await readTextFile({ path: path.join(root, "accents.txt") });
+
+    expect(result.truncated).toBe(true);
+    expect(result.text.endsWith("é")).toBe(true);
+  });
+
+  it("refuses bytes that are not text", async () => {
+    // A NUL is the whole test for a PNG, an executable or a zip.
+    await writeFile(path.join(root, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x1a]));
+    await expectCode(readTextFile({ path: path.join(root, "logo.png") }), "unsupported");
+  });
+
+  it("refuses bytes that are not valid UTF-8", async () => {
+    await writeFile(path.join(root, "latin1.txt"), Buffer.from([0x68, 0x69, 0xff, 0xfe, 0x0a]));
+    await expectCode(readTextFile({ path: path.join(root, "latin1.txt") }), "unsupported");
+  });
+
+  it("refuses a directory and a missing path", async () => {
+    await mkdir(path.join(root, "folder"));
+    await expectCode(readTextFile({ path: path.join(root, "folder") }), "not_a_file");
+    await expectCode(readTextFile({ path: path.join(root, "ghost") }), "not_found");
+  });
+
+  it("refuses anything outside the root, symlink or not", async () => {
+    await writeFile(path.join(outside, "secret.txt"), "no", "utf8");
+    await symlink(path.join(outside, "secret.txt"), path.join(root, "escape.txt"));
+
+    await expectCode(readTextFile({ path: path.join(outside, "secret.txt") }), "path_escape");
+    await expectCode(readTextFile({ path: path.join(root, "escape.txt") }), "path_escape");
+    await expectCode(readTextFile({ path: "/etc/passwd" }), "path_escape");
+  });
+
+  it("follows a symlink that stays inside the root and echoes the realpath", async () => {
+    await writeFile(path.join(root, "real.txt"), "inside", "utf8");
+    await symlink(path.join(root, "real.txt"), path.join(root, "alias.txt"));
+
+    const result = await readTextFile({ path: path.join(root, "alias.txt") });
+
+    expect(result.path).toBe(path.join(root, "real.txt"));
+    expect(result.text).toBe("inside");
   });
 });

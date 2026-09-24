@@ -4,16 +4,20 @@
   "name": "xminor-bb-plugins",
   "plugins": [
     {
+      "name": "claude-design",
+      "source": "./plugins/claude-design"
+    },
+    {
       "name": "context-compact",
       "source": "./plugins/context-compact"
     },
     {
-      "name": "file-manager",
-      "source": "./plugins/file-manager"
+      "name": "doc-review",
+      "source": "./plugins/doc-review"
     },
     {
-      "name": "pdf-viewer",
-      "source": "./plugins/pdf-viewer"
+      "name": "file-manager",
+      "source": "./plugins/file-manager"
     },
     {
       "name": "server-status",
@@ -26,6 +30,10 @@
     {
       "name": "usage-meter",
       "source": "./plugins/usage-meter"
+    },
+    {
+      "name": "voice-ink",
+      "source": "./plugins/voice-ink"
     }
   ]
 }

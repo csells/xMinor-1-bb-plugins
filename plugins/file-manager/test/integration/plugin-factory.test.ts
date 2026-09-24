@@ -95,7 +95,7 @@ describe("registrations", () => {
   it("registers every contract method exactly once", () => {
     const registered = [...host.harness.inspection.registrations.rpcMethods].sort();
     expect(registered).toEqual(CONTRACT_METHODS);
-    expect(registered).toHaveLength(26);
+    expect(registered).toHaveLength(28);
   });
 
   it("mounts both §5 routes with the auth modes §5 requires", () => {
@@ -109,10 +109,11 @@ describe("registrations", () => {
     expect(routes).toContainEqual({ method: "GET", path: DOWNLOAD_ROUTE, auth: "local" });
   });
 
-  it("declares the eight §7.1 settings", () => {
+  it("declares the nine §7.1 settings", () => {
     expect(Object.keys(host.harness.inspection.registrations.settingsDescriptors)).toEqual([
       "startFolder",
       "restoreLastFolder",
+      "openThreadWorkspace",
       "showHiddenFiles",
       "confirmOnDelete",
       "sortField",
@@ -154,6 +155,8 @@ describe("reachability", () => {
     directorySize: { path: "does-not-exist" },
     statPath: { path: "does-not-exist" },
     createPreviewUrl: { path: "does-not-exist" },
+    readTextFile: { path: "does-not-exist" },
+    listArchive: { path: "does-not-exist.zip" },
     searchDir: { path: "does-not-exist", query: "x" },
     createFolder: { path: "does-not-exist", name: "x" },
     renameEntry: { path: "does-not-exist", newName: "x" },
@@ -179,7 +182,7 @@ describe("reachability", () => {
     renameBookmark: { path: "does-not-exist", name: "x" },
   };
 
-  it("covers all 26 methods with a probe", () => {
+  it("covers all 28 methods with a probe", () => {
     expect(Object.keys(probes).sort()).toEqual(CONTRACT_METHODS);
   });
 
@@ -204,7 +207,7 @@ describe("end-to-end through the host", () => {
       startFolder: string;
       pluginVersion: string;
       chunkSizeBytes: number;
-      archiveSupport: { zip: boolean; tar: boolean; sevenZip: boolean };
+      archiveSupport: { zip: boolean; tar: boolean; sevenZip: boolean; rar: boolean };
     };
     expect(state.root).toBe(root);
     // The stored default (the home folder) is outside the temp root, so §7.1's
@@ -322,6 +325,32 @@ describe("end-to-end through the host", () => {
     }
     expect(state).toBe("done");
     expect(await readdir(path.join(root, "bundle"))).toEqual(["inside.txt"]);
+  });
+
+  it("lists an archive through the wire without extracting anything (§8.13)", async () => {
+    const source = path.join(root, "src");
+    await mkdir(path.join(source, "docs"), { recursive: true });
+    await writeFile(path.join(source, "docs", "inside.txt"), "payload", "utf8");
+    execFileSync("tar", ["-c", "-f", path.join(root, "bundle.tar"), "-C", source, "docs"]);
+    const before = (await readdir(root)).sort();
+
+    const listing = (await host.harness.behavior.callRpc("listArchive", {
+      path: path.join(root, "bundle.tar"),
+    })) as {
+      format: string;
+      entries: { path: string; kind: string }[];
+      fileCount: number;
+      directoryCount: number;
+      extractable: boolean;
+    };
+
+    expect(listing.format).toBe("tar");
+    expect(listing.entries).toEqual([
+      expect.objectContaining({ path: "docs", kind: "directory" }),
+      expect.objectContaining({ path: "docs/inside.txt", kind: "file" }),
+    ]);
+    expect(listing).toMatchObject({ fileCount: 1, directoryCount: 1, extractable: true });
+    expect((await readdir(root)).sort()).toEqual(before);
   });
 
   it("persists preferences through bb.sdk.plugins.updateSettings", async () => {

@@ -3,16 +3,26 @@
 // Context menus and touch drawers paint differently, but action visibility,
 // enablement, order and behavior must never diverge between them (§8.2).
 import type { FileEntry } from "../contract";
+import { isViewableEntry } from "../lib/viewer";
 import { effectiveKind } from "./FileRow";
 import type { IconName } from "./ui/icon";
 
 export interface SelectedEntryActionsProps {
+  /** Everything the action applies to; never empty when a surface renders. */
   entries: readonly FileEntry[];
+  /** False when `listDir` said the current directory is read-only. */
   writable: boolean;
   canPaste: boolean;
+  /** True when at least one extractor exists for the selected archive. */
   canExtract: boolean;
+  /**
+   * What `Enter` and a double-click do: walk into a folder, extract an
+   * archive, show a file. One callback for all three because the menu should
+   * not be the second place that decides which is which.
+   */
   onOpen: (entry: FileEntry) => void;
   onDownload: () => void;
+  /** One @-mention per selected file, into whatever composer is in reach (§8.8). */
   onAddToChat: () => void;
   onExtract: (entry: FileEntry) => void;
   onCut: () => void;
@@ -25,7 +35,9 @@ export interface SelectedEntryActionsProps {
   onDelete: () => void;
   onSetStartFolder: (entry: FileEntry) => void;
   onProperties: () => void;
+  /** True when the single directory row is already bookmarked (§8.11). */
   bookmarked: boolean;
+  /** False only while the list has not arrived yet. */
   canToggleBookmark: boolean;
   onToggleBookmark: (entry: FileEntry) => void;
 }
@@ -72,22 +84,37 @@ export function selectedEntryActionModel(
   const single = entries.length === 1 ? entries[0] : undefined;
   const directory = single !== undefined && effectiveKind(single) === "directory";
   const escapes = entries.some((entry) => entry.escapesRoot);
+  // Both "Download" and "Add to chat" act on exactly the real files in the
+  // selection: a folder has no bytes to send, and a link out of the root is
+  // refused by the server anyway (§6).
   const files = entries.filter(
     (entry) => !entry.escapesRoot && effectiveKind(entry) === "file",
   );
   const archive = single !== undefined && single.archiveFormat !== null ? single : undefined;
+  // Folders only, and one at a time: a bookmark or a start folder is a place
+  // to go, and a file (or a selection of five) is not one.
   const folderAction = single !== undefined && directory && !escapes;
+  // One row, one Open: a folder to walk into, an archive to extract, or a file
+  // to read. Multiple rows have no single destination, and a link out of the
+  // root has nothing this plugin is allowed to follow.
+  const openable =
+    single !== undefined && !escapes && (directory || isViewableEntry(single))
+      ? single
+      : undefined;
 
   const transfer: SelectedEntryAction[] = [];
-  if (folderAction) {
+  if (openable !== undefined) {
     transfer.push({
       id: "open",
       label: "Open",
-      icon: "FolderOpen",
+      icon: directory ? "FolderOpen" : openable.archiveFormat !== null ? "ArchiveRestore" : "Eye",
       disabled: false,
-      run: () => props.onOpen(single),
+      shortcut: "Enter",
+      run: () => props.onOpen(openable),
     });
   }
+  // "Add to chat" sits beside Download because it answers the same question —
+  // "take this file somewhere" — with the other destination: the agent.
   transfer.push(
     {
       id: "download",

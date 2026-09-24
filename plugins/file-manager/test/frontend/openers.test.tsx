@@ -6,7 +6,7 @@
 // extension, and it picks the first match. The preview wrapper therefore has
 // to be registered first, or a plain click on a .md link would open a folder
 // instead of the file.
-import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { PluginRpcTestHandlers, RenderedSlot } from "@get-bb/plugin-sdk/testing/app";
@@ -76,6 +76,7 @@ const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
   restoreLastFolder: true,
+  openThreadWorkspace: false,
   sortField: "name" as const,
   sortDirection: "asc" as const,
   viewMode: "list" as const,
@@ -102,7 +103,7 @@ function baseRpc(
       preferences: PREFERENCES,
       chunkSizeBytes: 8 * 1024 * 1024,
       maxListEntries: 5000,
-      archiveSupport: { zip: true, tar: true, sevenZip: false },
+      archiveSupport: { zip: true, tar: true, sevenZip: false, rar: false },
       pluginVersion: "0.6.0",
       primaryHostId: HOST_ID,
     }),
@@ -174,15 +175,22 @@ describe("file opener registration (§10.2)", () => {
     expect(locationOpener.title).toBe("File location");
   });
 
-  it("claims what a message link actually points at, but leaves pdf to the pdf viewer", () => {
+  it("claims what a message link actually points at, but leaves documents to the document viewer", () => {
     for (const extension of [
       "md", "txt", "json", "ts", "py", "png", "svg", // text, code, images
-      "zip", "tar", "gz", "7z", "deb", "dmg", // archives and packages
-      "mp4", "mp3", "docx", "xlsx", "sqlite", "ttf", "exe", // media, office, binaries
+      "zip", "tar", "gz", "tgz", "tbz", "7z", "rar", "deb", "dmg", // archives and packages
+      "mp4", "mp3", "sqlite", "ttf", "exe", // media, data, binaries
+      "epub", "pages", "numbers", "key", "csv", "tsv", // ebooks, Apple's office, tables
     ]) {
       expect(previewOpener.extensions).toContain(extension);
     }
-    expect(previewOpener.extensions).not.toContain("pdf");
+    // bb picks the FIRST matching opener in plugin-id order, and file-manager
+    // sorts before pdf-viewer: claiming any of these would shadow the viewer.
+    for (const extension of [
+      "pdf", "rtf", "doc", "docx", "odt", "xls", "xlsx", "ods", "ppt", "pptx", "odp",
+    ]) {
+      expect(previewOpener.extensions).not.toContain(extension);
+    }
     // A duplicate is dead weight bb would match twice over.
     expect(new Set(previewOpener.extensions).size).toBe(previewOpener.extensions.length);
     // Both openers must claim the same set, or the context menu would offer
@@ -251,6 +259,149 @@ describe("File location opener", () => {
 
     expect(await slot.findByText("Could not open this location")).toBeDefined();
     expect(slot.queryByTestId("fm-panel")).toBeNull();
+  });
+});
+
+describe("Preview + location opener — an archive link (§8.13)", () => {
+  const ARCHIVE_PATH = "knowledge-base/backups/bundle.zip";
+  const ARCHIVE_ABSOLUTE = `${BACKUPS}/bundle.zip`;
+  const ARCHIVE_ROW: FileEntry = { ...entryFor("bundle.zip"), archiveFormat: "zip" };
+
+  function archiveRpc(
+    overrides: Partial<PluginRpcTestHandlers<FileManagerContract>> = {},
+  ): Partial<PluginRpcTestHandlers<FileManagerContract>> {
+    return {
+      ...baseRpc(
+        { absolutePath: ARCHIVE_ABSOLUTE, name: "bundle.zip" },
+        [ARCHIVE_ROW, entryFor("readme.md")],
+      ),
+      listArchive: (input) => ({
+        path: input.path,
+        format: "zip",
+        archiveSizeBytes: 2048,
+        entries: [
+          {
+            path: "inside/a.txt",
+            kind: "file",
+            sizeBytes: 12,
+            modifiedAtMs: null,
+            encrypted: false,
+            linkTarget: null,
+          },
+        ],
+        totalEntries: 1,
+        fileCount: 1,
+        directoryCount: 1,
+        uncompressedBytes: 12,
+        encryptedCount: 0,
+        truncated: false,
+        partial: false,
+        stoppedBy: null,
+        problem: null,
+        extractable: true,
+      }),
+      extractArchive: () => ({
+        job: {
+          jobId: "job-1",
+          kind: "extract",
+          state: "running",
+          label: 'Extracting "bundle.zip"',
+          startedAtMs: 1,
+          finishedAtMs: null,
+          processedBytes: 0,
+          totalBytes: 0,
+          resultPath: null,
+          errorCode: null,
+          errorMessage: null,
+        },
+      }),
+      ...overrides,
+    };
+  }
+
+  it("shows the archive's contents where bb's preview would show nothing, under the same strip", async () => {
+    const slot = mountOpener(previewOpener, archiveRpc(), ARCHIVE_PATH);
+
+    const tree = await slot.findByTestId("fm-archive-tree");
+    expect(within(tree).getAllByTestId("fm-archive-row").map((row) => row.getAttribute("data-archive-path"))).toEqual(
+      ["inside", "inside/a.txt"],
+    );
+    expect(slot.queryByTestId("bb-preview")).toBeNull();
+    // The strip is still there, still naming the folder and offering the reveal.
+    expect(slot.getByTestId("fm-opener-folder").textContent).toBe("knowledge-base/backups");
+    expect(slot.getByTestId("fm-open-location")).toBeDefined();
+    // Resolved like a reveal first, then listed by its absolute path.
+    expect(slot.inspection.rpcCalls.map((call) => call.method)).toEqual([
+      "resolveFileLocation",
+      "listArchive",
+    ]);
+    expect(slot.inspection.rpcCalls[1]?.input).toEqual({ path: ARCHIVE_ABSOLUTE });
+  });
+
+  it("Extract… opens the file manager on the archive with its Extract dialog up", async () => {
+    const slot = mountOpener(previewOpener, archiveRpc(), ARCHIVE_PATH);
+
+    fireEvent.click(await slot.findByTestId("fm-archive-extract"));
+
+    const dialog = await slot.findByTestId("fm-extract-dialog");
+    expect(slot.getByTestId("fm-panel").getAttribute("data-current-path")).toBe(BACKUPS);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Extract" }));
+    await waitFor(() => {
+      expect(slot.inspection.rpcCalls.filter((call) => call.method === "extractArchive")).toEqual([
+        {
+          method: "extractArchive",
+          input: {
+            archivePath: ARCHIVE_ABSOLUTE,
+            destinationDir: BACKUPS,
+            createSubfolder: true,
+            conflict: "rename",
+          },
+        },
+      ]);
+    });
+  });
+
+  it("Open location reveals the archive without opening any dialog", async () => {
+    const slot = mountOpener(previewOpener, archiveRpc(), ARCHIVE_PATH);
+    await slot.findByTestId("fm-archive-tree");
+
+    fireEvent.click(slot.getByTestId("fm-open-location"));
+
+    await waitFor(() => {
+      const row = slot
+        .getAllByTestId("fm-row")
+        .find((candidate) => candidate.getAttribute("data-fm-path") === ARCHIVE_ABSOLUTE);
+      expect(row?.getAttribute("data-selected")).toBe("true");
+    });
+    expect(slot.queryByTestId("fm-extract-dialog")).toBeNull();
+  });
+
+  it("says so when the linked archive is gone", async () => {
+    const slot = mountOpener(
+      previewOpener,
+      {
+        ...archiveRpc(),
+        resolveFileLocation: () => ({
+          dirPath: BACKUPS,
+          absolutePath: ARCHIVE_ABSOLUTE,
+          name: "bundle.zip",
+          exists: false,
+          isDirectory: false,
+          matchHint: null,
+        }),
+      },
+      ARCHIVE_PATH,
+    );
+
+    expect(await slot.findByText("bundle.zip is not there")).toBeDefined();
+    expect(slot.inspection.rpcCalls.map((call) => call.method)).toEqual(["resolveFileLocation"]);
+  });
+
+  it("leaves every other file to bb's own preview, with nothing resolved up front", async () => {
+    const slot = mountOpener(previewOpener, archiveRpc(), "knowledge-base/backups/notes.gz");
+
+    expect(await slot.findByTestId("bb-preview")).toBeDefined();
+    expect(slot.inspection.rpcCalls).toHaveLength(0);
   });
 });
 

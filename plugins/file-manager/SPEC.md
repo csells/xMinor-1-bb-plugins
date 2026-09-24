@@ -914,6 +914,11 @@ Rules that follow from the algorithm — all of them are testable:
    (`Member name contains '..'`, exit 2) and strips leading `/`; Info-ZIP unzip
    6.00 strips `../` and absolute prefixes with a warning (exit 1). Neither is
    trusted — the post-walk is still required.
+10. **Archive listing** (§8.13) clamps the archive with `resolveExisting` like
+    any read and then writes nothing at all: a zip is read in-process, `tar`
+    and `7z` run only in list mode, with stdin closed and the archive after
+    `--file` / `--`. Member names such as `../x` or `/etc/x` are displayed and
+    never used as paths.
 
 ---
 
@@ -1049,6 +1054,8 @@ components/dialogs/ConfirmDeleteDialog.tsx FRONTEND
 components/dialogs/ExtractDialog.tsx      FRONTEND
 components/dialogs/PropertiesDialog.tsx   FRONTEND  §8.10: one path in full, or a summary of a selection
 components/dialogs/FolderPickerDialog.tsx FRONTEND  own folder browser (native picker is macOS-only)
+components/dialogs/FileViewerDialog.tsx  FRONTEND  §8.12: the file itself, when this surface has no bb preview panel
+components/ArchiveContents.tsx            FRONTEND  §8.13: an archive's contents as a tree (viewer and file opener)
 hooks/useDirectory.ts                     FRONTEND  listDir + realtime refetch + sort/filter memo
 hooks/useSelection.ts                     FRONTEND  anchor/range/toggle logic
 hooks/useClipboard.ts                     FRONTEND  cut/copy/paste state
@@ -1056,6 +1063,8 @@ hooks/useUploads.ts                       FRONTEND  React binding for lib/upload
 hooks/useJobs.ts                          FRONTEND  extract job list + JOB_CHANNEL
 hooks/usePreviewBase.ts                   FRONTEND  one createPreviewUrl per folder, renewed before it lapses (§8.9)
 lib/preview.ts                            FRONTEND  which entries have thumbnails, and baseUrl + name → URL (§8.9)
+lib/viewer.ts                             FRONTEND  which renderer a file name gets, and what is a question for the server (§8.12)
+lib/archive-tree.ts                       FRONTEND  an archive's member list as a folder tree (§8.13)
 lib/fm-rpc.ts                             FRONTEND  typed useRpc wrapper + error parsing
 lib/upload-manager.ts                     FRONTEND  token cache, XHR chunking, queue, resume, events
 lib/download.ts                           FRONTEND  anchor-click download helper
@@ -1085,28 +1094,38 @@ lib/errors.ts                             FRONTEND  parseRpcError → { code, me
 | click on the checkbox cell | toggle without clearing others; anchor moves |
 | click on empty table space | clear selection |
 | double click on a directory | navigate into it (`toPluginPanel`) |
-| double click on a file | open it in bb's preview panel; download when that is unavailable (§8.2.1) |
+| double click on a file | open it in bb's preview panel, or in the built-in viewer when this surface has none (§8.2.1) |
 | double click on an archive | open `ExtractDialog` |
 | double click on a row with `escapesRoot` | no-op + toast "Link points outside /home/coder" |
 
-#### 8.2.1 Opening a file (v0.7)
+#### 8.2.1 Opening a file (v0.7, reworked in v0.8)
 
-Double-click (and `Enter`) hand the file to bb's own preview panel through
+Double-click (and `Enter`, and the row menu's **Open**) hand the file to bb's
+own preview panel through
 `useBbNavigate().experimental_openFilePreview({ target: { kind: "host",
-hostId, path }, location: null })`, so it opens as a tab beside the manager
-instead of downloading. bb addresses a live file by host id, which is why
-`getState` carries `primaryHostId` — `bb.sdk.system.config()` on the backend,
-resolved once and remembered.
+hostId, path }, location: null })`, so it opens as a tab beside the manager.
+bb addresses a live file by host id, which is why `getState` carries
+`primaryHostId` — `bb.sdk.system.config()` on the backend, resolved once and
+remembered.
 
-Three ways this degrades, all to the pre-0.7 download: no `primaryHostId` (an
-older server, or a config call that failed), no `experimental_openFilePreview`
-on the client's runtime, and a host that answers `false` (a surface with no
-preview panel). A throw from the host is caught for the same reason — a slot
-component that throws takes the plugin's whole UI down.
+Three ways that call answers `false`: no `primaryHostId` (an older server, or
+a config call that failed), no `experimental_openFilePreview` on the client's
+runtime, and a host with no preview panel on this surface. A throw is caught
+for the same reason a slot component never throws — it takes the plugin's
+whole UI down.
 
-An archive still opens `ExtractDialog`: there is nothing in a `.zip` to
-preview, and extracting it is what the gesture is for. Downloading stays on
-the row menu, where it is explicit.
+**All three end in the built-in viewer (§8.12), not in a download.** That
+correction is the whole of v0.8. bb wires `openFilePreview` into exactly two
+surfaces — the thread split view and the right-hand plugin panel host — so the
+third answer was not an edge case at all: on the sidebar's own full-page File
+Manager, *every* file answered `false`, and every double-click quietly put a
+copy in ~/Downloads instead of showing anything. Downloading stays where it was
+always explicit: the row menu, and a button inside the viewer.
+
+An archive still opens `ExtractDialog`: extracting it is what the gesture is
+for. Looking inside one is quick look's job since v0.9 (§8.13) — `Space` — so
+the double-click keeps the meaning it has always had. A socket, fifo or device node still downloads — there is no
+content to render, and the bytes are the only thing that can be handed over.
 | right click on a row | `RowContextMenu`; if the row is not selected, select it first |
 | right click on empty space | `BackgroundContextMenu` |
 | select a row on a compact viewport or coarse primary pointer | show `SelectionActionBar`; **Actions** opens the same selected-item operations in a responsive bottom drawer |
@@ -1293,18 +1312,21 @@ a keystroke that opens the focused row in bb's preview panel.
 
 **Quick look — `Space`.** Bound in `handleKeyDown` below the `isTypingTarget`
 guard, so typing a space in the filter or in the path bar is untouched. It runs
-exactly the path a double-click runs — `previewEntry`, i.e.
-`experimental_openFilePreview` with `primaryHostId` (§8.2.1) — and differs from
-`Enter` in three ways, each deliberate:
+exactly the path a double-click runs — `showEntry`, i.e. bb's preview panel
+where there is one and the built-in viewer where there is not (§8.2.1, §8.12)
+— and differs from `Enter` in two ways, each deliberate:
 
 | Case | `Enter` | `Space` |
 | --- | --- | --- |
-| directory | navigates into it | nothing (there is nothing to preview) |
-| archive | opens `ExtractDialog` | previews the file |
-| host declines the preview | downloads | nothing |
+| directory | navigates into it | nothing (there is nothing to read) |
+| archive | opens `ExtractDialog` | shows its contents (§8.13) |
+| file, no preview panel on this surface | built-in viewer | built-in viewer |
 
-The download fallback is the difference that matters: a peek that silently puts
-a file in the downloads folder is not a peek. `preventDefault()` is called
+The third row was the difference that mattered until v0.8, and it read
+"downloads / nothing": a peek that silently puts a file in the downloads folder
+is not a peek, so Space did nothing at all rather than that. Now both do the
+same right thing and the rule survives only as "quick look never downloads".
+`preventDefault()` is called
 whenever a row holds the cursor — including for a folder — because the
 alternative is Space paging the listing out from under that row; with no row
 focused Space is left to the browser, per §8.3's rule about unhandled keys.
@@ -1504,6 +1526,191 @@ The two context menus of §8.2 carry the same toggle for the folder they were
 opened on — the row menu only for a single, non-escaping directory, because a
 bookmark is a place to go and a file is not one.
 
+---
+
+### 8.12 The built-in viewer (v0.8)
+
+`components/dialogs/FileViewerDialog.tsx` — what shows a file when this surface
+has no bb preview panel to delegate to.
+
+**Why it exists.** §8.2.1 delegated to `experimental_openFilePreview` and, on a
+`false`, downloaded. bb provides that capability from exactly two places — the
+thread split view and the right-hand plugin panel host — and from a default of
+`() => false` everywhere else. The sidebar's own full-page File Manager is one
+of the "everywhere else", so on the surface the panel is most used from, *no*
+file ever opened: every double-click and every row-menu Open put a copy in
+~/Downloads and showed nothing. That is the bug v0.8 fixes, and no amount of
+correcting the call site would have: the surface has no preview panel to open
+into, so the panel has to be one.
+
+bb's panel still wins wherever it exists (`showEntry` asks it first). It sits
+*beside* the manager and survives navigation, which a modal cannot.
+
+**Two transports, split by what the renderer needs** — and since v0.9 a third
+for archives, whose table of contents is what is worth showing (§8.13).
+
+| Kind | Source | Rendered with |
+| --- | --- | --- |
+| image (`lib/preview.ts#isImageName`) | `createPreviewUrl` + the file name | `<img>` |
+| `pdf` | same | `<iframe>` |
+| video (`mp4 m4v webm ogv mov`) | same | `<video controls>` |
+| audio (`mp3 wav ogg oga m4a aac flac opus weba`) | same | `<audio controls>` |
+| `md` / `markdown` / `mdx` | `readTextFile` | bb's `Markdown`, with a **Source** toggle |
+| an archive (`entry.archiveFormat`, v0.9) | `listArchive` | the contents tree of §8.13 |
+| everything else | `readTextFile` | bb's `experimental_SourceCode` |
+
+The URL half is the gallery's transport (§8.9) reused unchanged — folder-rooted,
+one mint per folder, bytes that never enter JS. The string half is new, and it
+is the only thing in this plugin that reads file content over RPC: a renderer
+needs the text *as a string*, and the download route is
+`application/octet-stream` + `Content-Disposition` on purpose.
+
+**"Is this text?" is answered from the bytes, never from the name**
+(`src/preview.ts#readTextFile`). `lib/viewer.ts` decides only the four
+browser-painted kinds from the extension, because getting *those* wrong costs a
+request for bytes nothing can display; every other name — including `tool.bin`
+and `bundle.zip` — falls to `text`, which is a **question for the server**, not
+a claim. That is the only way `Makefile`, `LICENSE`, `.gitignore` and the
+extension nobody has heard of yet ever open, and it is why the codec lists above
+are short: `mkv`, `avi` and `wmv` are named on disk and unplayable in a
+`<video>`, so they take the text branch and end in the honest download offer
+rather than in a black rectangle.
+
+The server's rules, in order: `resolveExisting` (§6, unchanged), must be a
+regular file, read at most `MAX_TEXT_PREVIEW_BYTES` (1 MiB) from offset 0, and
+then two tests — a NUL byte anywhere in the window, and `TextDecoder("utf-8",
+{ fatal: true })`. Either failure throws `unsupported`, which the viewer renders
+as "No preview for this kind of file" plus the download, and which is
+deliberately distinct from a real `permission_denied` or `io_error`. A cap that
+lands mid-character is not a binary file: a truncated window retries the decode
+up to three bytes earlier, an untruncated one gets exactly one attempt.
+
+**Reach.** Double-click, `Enter`, `Space` (§8.9) and the row menu's **Open**,
+all through the panel's single `openEntry` / `showEntry` pair — the menu does
+not get a second opinion about what "open" means. `Open` on a row was
+directory-only before v0.8; it now covers any single non-escaping file, which
+is what made the action visible at all.
+
+### 8.13 Looking inside an archive (v0.9)
+
+`listArchive` (RPC), `src/archive-listing.ts` (the bounded listers),
+`src/archive-parse.ts` (the pure parsers), `components/ArchiveContents.tsx`
+(the view), `lib/archive-tree.ts` (the tree model).
+
+**Why.** Before v0.9 an archive had exactly one answer in this plugin:
+extract it. Quick look on a `.zip` ended in "No preview for this kind of
+file", and a `.zip` link in a chat message opened bb's own preview, which has
+nothing to show for one. Deciding whether to extract — and where to — needs
+the contents first.
+
+**Where it shows.**
+
+| Surface | Reached by | Extract… |
+| --- | --- | --- |
+| built-in viewer (§8.12) | `Space` (quick look) on an archive row | swaps the viewer for the panel's `ExtractDialog` (`setDialog`) |
+| "Preview + location" opener (§10.2) | a plain click on an archive link in a message | switches the tab to the reveal with `extractOnReveal`: the file manager opens on the archive's folder, selects it, and opens `ExtractDialog` on it |
+
+Double-click, `Enter` and **Open** still open `ExtractDialog` (§8.2.1). On a
+surface with bb's preview panel, `Space` hands the archive to that panel as it
+hands any file (§8.2.1); bb then opens it with the first matching file opener,
+which is this plugin's "Preview + location" — the same tree. There is no
+second extraction path anywhere: both surfaces end in the existing dialog, job
+and tray, and "Extract…" is only offered when the listing says `extractable`
+(the same plan probe `extractArchive` runs before promising a job).
+
+**The contract.** `listArchive({ path })` → `archiveListingSchema`: the
+realpath'ed archive and its format, the archive's size, the first
+`MAX_ARCHIVE_ENTRIES` (10 000) members in archive order, and totals over every
+member the scan saw — `totalEntries`, `fileCount`, `directoryCount` (implied
+folders included: most zips never list their folders), `uncompressedBytes`,
+`encryptedCount`. `truncated` says the list is shorter than the archive;
+`partial` + `stoppedBy` (`entries` / `time` / `output` / `damaged`) say the
+counts themselves are lower bounds, and `problem` carries the reader's own
+complaint for `damaged`. A member is `{ path, kind, sizeBytes, modifiedAtMs,
+encrypted, linkTarget }`, `kind` one of `file`, `directory`, `symlink`,
+`hardlink`, `other`.
+
+**Readers — one per family, chosen for what each is best at.**
+
+| Format | Reader | Why |
+| --- | --- | --- |
+| `zip` | [yauzl](https://github.com/thejoshwolfe/yauzl) 3.x, in-process, `decodeStrings: false` | the only way to get member names as raw bytes (below). Reads the central directory through a 256 KiB window (two tiny reads per member otherwise: 25 000 members went from 1.5 s to 0.3 s) shifted past any prefix, so a self-extracting zip reads too. Needs no tool on the host. |
+| `tar`, `tar.gz`, `tar.bz2`, `tar.xz` | GNU `tar --list --verbose --full-time --numeric-owner --quoting-style=c --force-local --file <archive>`, `LC_ALL=C`, `TZ=UTC`, `TAR_OPTIONS` unset | tar already decompresses all three; C quoting puts every name in double quotes with C escapes, so spaces, newlines, quotes, `" -> "` inside a name and stray bytes never break a column. |
+| `7z`, `rar` | `7z l -slt -sccUTF-8 -bd -p<dummy> -- <archive>` | one `Key = Value` block per member. The dummy password makes an archive with an encrypted *file list* fail at once ("its list of files is encrypted") instead of prompting. |
+
+A zip yauzl cannot read at all (a truncated file, a malformed directory) goes
+to 7z when it is installed — 7z salvages what the local headers still say.
+Names from that fallback are 7z's decoding, not ours.
+
+**Names.** A zip member name is decoded from its raw bytes:
+
+1. an Info-ZIP Unicode Path extra field (0x7075) whose CRC matches the raw
+   name — the writer's own statement of the name;
+2. the UTF-8 flag (bit 11) — UTF-8, lossily if the bytes disagree;
+3. otherwise valid UTF-8 is UTF-8, and anything else is **CP866**, the DOS
+   code page Windows Explorer writes on a Russian system. Real Russian text in
+   CP866 almost never passes as UTF-8 (capitals and `а`–`п` are UTF-8
+   continuation bytes), so the order is safe. The table is built in, not
+   `TextDecoder("ibm866")`, so it does not depend on the Node build's ICU.
+
+Backslashes become slashes (.NET's `ZipFile` wrote them for years). tar names
+come back byte-exact from the C escapes and go through step 3; 7z prints
+UTF-8 itself. Measured on this host: `unzip -Z` happens to decode CP866 here
+(a distro patch plus a guess), `7z l` turns the same names into U+FFFD even
+with `-mcp=866` — which is why zip is not read through either.
+
+**Display, never action.** A member path is `/`-split for the tree with empty
+and `.` segments dropped, `..` kept as a folder literally named `..`, and a
+leading `/` kept as a folder named `/` (`memberSegments` on the server,
+`archiveSegments` in the page — the same rules, so the folder count and the
+tree agree). Control characters render as their Unicode pictures (`␊`), so a
+newline in a name is visible rather than collapsed.
+
+**Bounds.** The RPC waits and bb cannot cancel a request, so:
+
+| Bound | Default | On hit |
+| --- | --- | --- |
+| members returned | 10 000 (`MAX_ARCHIVE_ENTRIES`) | the rest are counted, `truncated` |
+| members counted | 1 000 000 | stop, `partial`, `stoppedBy: "entries"` |
+| distinct folders remembered | 100 000 | the same — this set is the only thing that grows with a hostile archive |
+| wall clock | 10 s | stop, `stoppedBy: "time"` |
+| tool output | 256 MiB, one line ≤ 64 KiB | stop, `stoppedBy: "output"`; an overlong line is dropped whole |
+
+Output is parsed a line at a time as it arrives and never held whole. A tool
+that has to stop is killed like an extraction's: SIGTERM, then SIGKILL after
+3 s, and to its whole process group (it is spawned `detached`), so the `xz`
+GNU tar runs underneath dies with it. A plugin dispose kills every running
+lister and fails its request. A non-zero exit after some members is
+`damaged` — a cut-short download still shows what it holds; with none it is
+`archive_failed` carrying the tool's first stderr lines (or 7z's `ERRORS:`
+list, which it prints on stdout).
+
+**Path safety** is §6 unchanged: `resolveExisting` (realpath, then the prefix
+test), a regular file or `not_a_file`, the format from the realpath'ed name or
+`unsupported_archive`. A missing tool is `unsupported_archive` with the reason
+("7z is not installed on this host"); every other failure maps through
+`mapNodeError`. Listing writes nothing: yauzl reads a file handle, and the
+tools run in list mode with stdin closed, their argument after `--file` / `--`.
+
+**RAR.** Every 7z *lists* a RAR — headers need no decoder — but Debian's
+`7zip` has no RAR codec, so it cannot *extract* one (`7zip-rar` adds it).
+`probeRarCodec` reads `7z i` once at load; `archiveSupport.rar` and
+`extractable` follow it, `planFor` refuses `rar` without it, and the viewer
+shows a RAR's contents with no Extract… on such a host.
+
+**The view.** A summary line — files, folders, uncompressed size, archive
+size, encrypted count — then a note when the list or the counts are not the
+whole archive, then the tree: folders first, name order as in the panel
+(numeric, case-blind), a chevron per folder, the chain of lone top-level
+folders open on arrival (most archives wrap everything in one folder). Per
+row: name, uncompressed size, modified time (`—` when the format recorded
+none, including a zip's zero DOS date), a lock for an encrypted member, `→
+target` for a symlink, `hard link to …` for a tar hard link. The tree is a
+WAI-ARIA `tree` with `aria-activedescendant` (↑/↓, →/←, Home/End,
+Enter/Space) and the rendered rows are capped at `MAX_TREE_ROWS`, like the
+panel's own tree. States: loading, error ("Could not read this archive", or
+"Can't look inside this archive here" for `unsupported_archive`), empty.
+
 ## 9. Visual & theming rules
 
 The Tailwind pass emits **default-theme utilities only**, wrapped in
@@ -1659,13 +1866,28 @@ preview) under one 40px strip naming the folder and carrying an *Open location*
 button. `location` is only ever reached from the context menu, and opens the
 file manager directly.
 
-`LOCATION_OPENER_EXTENSIONS` (contract.ts) is the claimed set: text, docs,
-office, config, data, code, web, images, audio, video, archives, fonts and
-binaries. `pdf` is deliberately excluded — the pdf-viewer plugin owns it, and
-two plugins claiming one extension makes the automatic pick depend on plugin
-load order. A name with no extension (`Makefile`, `LICENSE`) is unreachable:
-bb's own `getFileExtension` returns null and the menu renders no opener rows at
-all, for any plugin.
+`LOCATION_OPENER_EXTENSIONS` (contract.ts) is the claimed set: text, ebooks,
+config, data, code, web, images, audio, video, archives, fonts and binaries.
+Documents are deliberately excluded (v0.9): `pdf`, `doc`, `docx`, `xls`,
+`xlsx`, `ppt`, `pptx`, `odt`, `ods`, `odp` and `rtf` belong to the pdf-viewer
+plugin, which renders them. bb's automatic pick is the first matching opener
+in plugin-id order and `file-manager` sorts before `pdf-viewer`, so claiming
+any of them here would shadow the viewer with a strip over bb's `Original`,
+which cannot render an office file at all. `epub`, Apple's `pages`,
+`numbers` and `key`, and `csv`/`tsv` stay claimed — the viewer does not read
+them. A name with no extension (`Makefile`, `LICENSE`) is unreachable: bb's own
+`getFileExtension` returns null and the menu renders no opener rows at all, for
+any plugin.
+
+**An archive link is drawn, not delegated (v0.9).** bb's `Original` has
+nothing to show for an archive, so when `detectArchiveFormat` (shared in
+contract.ts) recognises the link's name, `FilePreviewOpener` renders the
+§8.13 contents under the same strip instead. It resolves the link with
+`resolveFileLocation` first — the listing needs the absolute path, and a link
+can name a file that has since gone — and its **Extract…** switches to the
+reveal with `extractOnReveal`, so the panel's own `ExtractDialog` opens on the
+selected archive. Every other name still renders `Original` with no request
+made until the strip's button is pressed.
 
 **Resolution is a backend job.** An opener's `path` is relative to its
 `source`: a worktree (`environmentId` → `environments.get().path`), a thread's
@@ -1683,10 +1905,12 @@ the filter — the file the link meant is then the only row on screen. A path
 outside the root stays a refusal (`path_escape`): walking up from it would
 answer with a folder nobody named.
 
-The panel body takes three optional props for this (§10.1's surface): 
+The panel body takes four optional props for this (§10.1's surface): 
 `initialPath` (the folder to open, outranking §1.5's rules), `revealPath` (the
 entry to select once its folder lists, through the same machinery the path bar
-uses) and `initialQuery` (the filter seed, which unfolds the compact filter).
+uses), `extractOnReveal` (v0.9: once that entry is selected and it is an
+archive, open `ExtractDialog` on it) and `initialQuery` (the filter seed, which
+unfolds the compact filter).
 
 ### 10.3 Thread workspace — the folder a thread's code lives in (v0.7)
 
@@ -1748,6 +1972,32 @@ move uses — a second navigation path would be a second set of bugs. A lookup
 that *failed* keeps the button live, because "bb did not answer" is not "there
 is nowhere to go": the click retries once, and only then becomes a toast.
 
+**Opening there without the click (v0.9.1).** `openThreadWorkspace` — a
+`boolean` descriptor, default `false`, carried in `getState().preferences`
+beside `restoreLastFolder` and for the same reason (§7.1: the panel decides
+where to open in the tick `getState` lands) — makes the *bootstrap* ask the
+same question the toolbar asks, and open the answer.
+
+The lookup is the one place the bootstrap may wait on a second round trip, and
+it is spent only where it can pay off: the preference is on **and** the surface
+has a `threadId`, read once through a ref like `initialPath` is, so a later
+prop change cannot drag a user who has since navigated back to the checkout.
+Every "no" — all three `reason`s, and a lookup that threw — leaves the folder
+`null`, and the decision is the one it was before the preference existed.
+
+`pickInitialFolder` gains `workspaceFolder: string | null` and a `"workspace"`
+source, ranked **below a deep link and above the memory**: the memory is one
+value shared by every surface, so letting it win would mean the first thread
+you opened decides where every later thread's panel opens. The §6 prefix test
+is applied there as well as at the caller — `threadWorkspace` reports an
+`outside_root` checkout rather than hiding it, and redirecting to it would
+strand the panel in a folder it may not list.
+
+The toolbar button stays exactly as it is. With the preference on it opens the
+folder it would have jumped to, which makes it a no-op *and* the way back after
+the user has moved elsewhere; with the preference off nothing about §10.3
+changes.
+
 ---
 
 ## 11. Test plan
@@ -1768,7 +2018,10 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `mutations.test.ts` | createFolder/rename/delete/move/copy happy paths; `exists`, `not_empty`, `destination_inside_source`, `path_escape` in `failed[]`; deleting a symlink removes the link only; `fs` signal published with the right dirs |
 | `uploads.test.ts` | create→chunk→finish writes exact bytes; wrong offset → 409 with `expected`; resume after a partial chunk; duplicate `uploadCreate` resumes the same session; `conflict: "rename"` produces `name (1).ext`; abort removes both sidecar files; GC drops stale sessions |
 | `http.test.ts` | **`registrations.httpRoutes` contains `{ method:"POST", path:"/upload/chunk", auth:"token" }`** (the fake host records auth but does not enforce it — this assertion is the only guard against regressing to `local`, which would 415 in production); download returns exact bytes, `content-type: application/octet-stream`, correct `content-disposition` incl. `filename*=UTF-8''` for a Cyrillic name; `Range: bytes=2-5` → 206 + `content-range`; `Range: bytes=999-` → 416; directory path → 404; escaping path → 403 |
-| `archives.test.ts` | zip and tar.gz extract into a subfolder; a member named `../escaped` never lands outside root; unsupported extension → `unsupported_archive`; job transitions `running → done`; cancel kills the child process and reports `canceled` |
+| `archives.test.ts` | zip and tar.gz extract into a subfolder; a member named `../escaped` never lands outside root; unsupported extension → `unsupported_archive`; job transitions `running → done`; cancel kills the child process and reports `canceled`; v0.9: `hasRarCodec` reads `7z i`, `rar` is extractable only with the codec, and a `.rar` is refused up front without it |
+| `archive-parse.test.ts` | §8.13, pure: CP866 table, UTF-8-then-CP866 fallback, the zip UTF-8 flag, a Unicode Path field trusted only on a matching CRC, backslashes; zip kinds from Unix and DOS attributes, zero DOS date → null, prefix length of a self-extracting zip; `readCQuoted` and `parseTarLine` on real GNU tar lines (spaces, newline, quote, backslash, Cyrillic octal escapes, `-> ` inside a name, hard links, devices, pre-1970, pax fractions, volume labels); `7z -slt` blocks (multi-line path, folders, encryption, symlinks, the `ERRORS:` list); `LineSplitter` drops an overlong line whole; `ListingCollector` counts implied folders and refuses past its caps |
+| `archive-listing.test.ts` | §8.13, I/O: CP866 / UTF-8-without-flag / UTF-8-flag names from a real zip; odd names shown as written and the root left untouched; encrypted members and undated ones; a self-extracting zip; 11 500 members → 10 000 sent and all counted; the scan cap; a cut zip salvaged by 7z as `damaged`; tar.gz with a symlink, a hard link and awkward names; a `../` member; a cut tar.gz as `damaged` with tar's complaint; 7z plain, with encrypted members, with an encrypted file list; RAR through 7z with `extractable` following the codec; `path_escape` for a path or a link out of the root, `not_found`, `not_a_file`, `unsupported_archive`, a missing tool; fake children for the exact tar arguments, the clock, the output cap, the scan cap, dispose and a tool that will not start |
+| `preview.test.ts` | §8.9 + §8.12: `createPreviewUrl` mints for a folder under the root and refuses `/etc`, a symlink out, a missing folder and a file; `readTextFile` returns a short file whole, opens a name with no extension, caps a long one and says `truncated`, keeps a multi-byte character split by the cap, and throws `unsupported` for a NUL byte and for non-UTF-8 — but `not_a_file` / `not_found` / `path_escape` for the failures that are not about the bytes |
 | `settings.test.ts` | invalid `startFolder` falls back to root; `savePreferences` calls `sdk.plugins.updateSettings` with exactly the changed keys (`harness.inspection.sdk.callsTo(...)`) |
 | `bookmarks.test.ts` | §8.11: `addBookmark` stores the realpath'ed folder and refuses `/etc`, a missing folder, a file and the 51st; `listBookmarks` marks a deleted folder `available: false` and keeps it, drops a row outside the root, dedupes and caps a corrupt row; `removeBookmark` and `renameBookmark` work on a folder that is gone and still reject an escaping path |
 
@@ -1782,6 +2035,10 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `selection.test.tsx` | click / ctrl-click / shift-click / `Ctrl+A` / `Escape` produce the expected selections |
 | `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed; compact and wide coarse-pointer selection disable native row/tile dragging and expose the responsive drawer; desktop remains draggable; desktop and touch action IDs and disabled states stay in parity |
 | `uploads.test.tsx` | dropping two `File`s calls `uploadCreate` twice and posts chunks in order (stub `XMLHttpRequest`); a 409 response resumes from `expected`; the tray shows percentages |
+| `viewer.test.tsx` | §8.12: markdown renders through bb's `Markdown` and toggles to `experimental_SourceCode`; every other text file goes straight to the source viewer, including one with no extension; an image / PDF / video / audio hangs off the folder's preview URL with its name percent-encoded and never calls `readTextFile`; `unsupported` renders the download offer while `permission_denied` renders a failure; a host that *does* take the preview never opens the dialog at all |
+| `archive-viewer.test.tsx` | §8.13 in the panel: `Space` on an archive shows its tree (never `readTextFile`); folders first by name with the lone top folder open; click and arrow keys open and close folders; the summary line, the lock and the link target; the truncated, damaged, timed-out, empty, failed and unsupported states; Extract… swaps the viewer for `ExtractDialog` and starts `extractArchive`, and is absent when not `extractable`; a double click still extracts; a previewing host still gets the archive |
+| `archive-tree.test.ts` | §8.13, pure: implied folders, folders first, numeric case-blind order, an explicit folder merged into its implied one, duplicate files kept, `..` and `/` shown as folders, the lone-folder chain opened, the row cap, control characters made visible |
+| `openers.test.tsx` | §10.2: registration order and titles; the claimed set, with `pdf` and every office format left to the pdf-viewer; the reveal, glob pre-filter and refusal; bb's preview in a scrolling flex frame; v0.9: an archive link shows its contents under the strip (resolve, then list), Extract… reveals it with `ExtractDialog` open, Open location only reveals, a missing archive says so, any other name keeps `Original` with no request |
 | `bookmarks.test.tsx` | §8.11: the star lights up for a bookmarked folder and toggles `addBookmark` / `removeBookmark`; the list navigates through `navigateTo`; a missing row is marked and removes itself; the rename dialog sends `renameBookmark`; both context menus toggle; the compact chrome keeps the star and moves the list into the overflow; the 51st is refused client-side |
 
 ### 11.2 Shell smoke tests (copy-pasteable)
@@ -1954,7 +2211,9 @@ and `app.tsx` still in place) must pass before handing off.
 | `src/listing.ts` | `listDir`, `statPath`, `searchDir`, entry mapping, archive detection, `statfs` volume info |
 | `src/mutations.ts` | `createFolder`, `renameEntry`, `deleteEntries`, `moveEntries`, `copyEntries`, conflict policies, `uniqueName()` (`name (1).ext`), EXDEV fallback via `fs.cp` + `rm` |
 | `src/uploads.ts` | session sidecars, `uploadCreate/Status/Finish/Abort`, chunk lock set, `writeChunk()`, GC sweep |
-| `src/archives.ts` | format detection by extension, `spawn` of `tar`/`unzip`/`7z` with `--no-same-owner --no-same-permissions`, staging dir, post-extraction containment walk, capability probe at load |
+| `src/archives.ts` | format detection by extension, `spawn` of `tar`/`unzip`/`7z` with `--no-same-owner --no-same-permissions`, staging dir, post-extraction containment walk, capability probe at load (v0.9: plus the RAR codec probe, and it builds the lister) |
+| `src/archive-listing.ts` | v0.9, §8.13: `listArchive` — the §6 clamp, yauzl for zip, `tar -tv` and `7z l` children with their bounds, kill and dispose |
+| `src/archive-parse.ts` | v0.9, §8.13: pure name decoding (UTF-8 / CP866), zip record mapping, the tar and 7z line parsers, `LineSplitter`, `ListingCollector` |
 | `src/jobs.ts` | in-memory job map, `publishJob`, `jobStatus`, `jobCancel` |
 | `src/http-routes.ts` | route 1 (`token`) and route 2 (`local`) exactly as §5 |
 | `src/rpc.ts` | `bb.rpc.register(fileManagerContract, handlers)` wiring only |
@@ -1966,7 +2225,8 @@ and `app.tsx` still in place) must pass before handing off.
 | File | Responsibility |
 | --- | --- |
 | `app.tsx` | slot registration (§10) + `FileManagerPanel` import |
-| `components/*.tsx`, `components/dialogs/*.tsx` | §8 tree |
+| `components/*.tsx`, `components/dialogs/*.tsx` | §8 tree (v0.9: `components/ArchiveContents.tsx`, §8.13) |
+| `lib/archive-tree.ts` | v0.9, §8.13: the archive tree model — implied folders, order, expansion, the row cap |
 | `hooks/*.ts` | §8 tree |
 | `lib/fm-rpc.ts`, `lib/upload-manager.ts`, `lib/download.ts`, `lib/fm-paths.ts`, `lib/format.ts`, `lib/errors.ts` | §8 tree |
 | `test/frontend/*.test.tsx` | §11.1 |
@@ -2009,7 +2269,12 @@ Frontend contract assumptions it may rely on without asking:
 5. **Archive extraction shells out to `tar`/`unzip`/`7z`.** All three exist here
    (GNU tar 1.35, Info-ZIP 6.00, 7z). If a reviewer objects to
    `child_process`, the alternative is bundling `tar` + `yauzl` as
-   `dependencies`; the containment walk stays either way.
+   `dependencies`; the containment walk stays either way. Listing (§8.13)
+   already uses `yauzl` for zip, as a runtime dependency; tar and 7z listing
+   still shell out, and listing the tar family needs **GNU** tar
+   (`--quoting-style`, `--full-time`). BSD tar has neither option, so there
+   the listing would fail with tar's own message — unverified, as no BSD tar
+   is installed here.
 6. **A `bb plugin reload` during a large download can dispose plugin resources
    under the live stream** (the drain window is 5 s and a streamed `Response`
    returns immediately). Mitigation is already in the spec: hold nothing but a

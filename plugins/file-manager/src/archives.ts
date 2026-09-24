@@ -18,13 +18,23 @@
 // Extraction shells out to `tar`/`unzip`/`7z` (§14 risk 5) with
 // `--no-same-owner --no-same-permissions`, never runs as a shell string, and
 // never lets an archive choose its own destination.
+//
+// Looking inside an archive without extracting it (§8.13) is its read-only
+// sibling, src/archive-listing.ts. It is built here so that both share one
+// probe of the host: the same executables, found once, answer "can I list
+// this?" and "can I extract this?".
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access, lstat, mkdir, readdir, readlink, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 
-import type { ArchiveFormat, Job } from "../contract";
+import type { ArchiveFormat, ArchiveListing, Job } from "../contract";
+import {
+  createArchiveLister,
+  type ListingLimits,
+  type SpawnLister,
+} from "./archive-listing";
 import { fmError, mapNodeError } from "./errors";
 import type { JobsModule } from "./jobs";
 import { detectArchiveFormat } from "./listing";
@@ -42,12 +52,16 @@ export interface ArchiveSupport {
   zip: boolean;
   tar: boolean;
   sevenZip: boolean;
+  /** 7z is present *and* carries the RAR codec (see probeRarCodec). */
+  rar: boolean;
 }
 
-interface Executables {
+export interface Executables {
   tar: string | null;
   unzip: string | null;
   sevenZip: string | null;
+  /** True when `sevenZip` can unpack RAR data, not only read RAR headers. */
+  sevenZipRar: boolean;
 }
 
 /** PATH lookup without a shell: no quoting bugs, no injection surface. */
@@ -73,13 +87,80 @@ async function firstExecutable(names: readonly string[]): Promise<string | null>
   return null;
 }
 
+/**
+ * True when `7z i` output lists a RAR codec.
+ *
+ * The codec table follows a `Codecs:` line and runs to the next blank line;
+ * each row ends in the codec's name (`… 40305 Rar5`). Only the name is
+ * matched, so a build that lays the other columns out differently still
+ * answers correctly.
+ */
+export function hasRarCodec(output: string): boolean {
+  let inCodecs = false;
+  for (const line of output.split("\n")) {
+    const trimmed = line.trim();
+    if (!inCodecs) {
+      inCodecs = trimmed === "Codecs:";
+      continue;
+    }
+    if (trimmed === "") break;
+    if (/(?:^|\s)Rar\d*$/u.test(trimmed)) return true;
+  }
+  return false;
+}
+
+const RAR_PROBE_TIMEOUT_MS = 5_000;
+const RAR_PROBE_OUTPUT_LIMIT = 1024 * 1024;
+
+/**
+ * Whether this 7z can unpack RAR data rather than only read RAR headers.
+ *
+ * 7-Zip keeps the RAR decoder in a separate, non-free codec, and Debian's
+ * `7zip` package is built without it (`7zip-rar` adds it back) — yet every
+ * build *lists* a RAR, because reading headers needs no decoder. So "7z is
+ * installed" answers the listing question and not the extraction one, and
+ * `7z i`, which prints the codecs the build carries, answers the other. Any
+ * failure reads as "no": the cost is an Extract button, never a job that
+ * dies half-way.
+ */
+export function probeRarCodec(sevenZip: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let output = "";
+    let settled = false;
+    const finish = (value: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(sevenZip, ["i"], { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(false);
+    }, RAR_PROBE_TIMEOUT_MS);
+    timer.unref?.();
+    child.stdout?.on("data", (piece: Buffer) => {
+      if (output.length < RAR_PROBE_OUTPUT_LIMIT) output += piece.toString("utf8");
+    });
+    child.once("error", () => finish(false));
+    child.once("close", (code) => finish(code === 0 && hasRarCodec(output)));
+  });
+}
+
 export async function probeExecutables(): Promise<Executables> {
   const [tar, unzip, sevenZip] = await Promise.all([
     findExecutable("tar"),
     findExecutable("unzip"),
     firstExecutable(["7z", "7za", "7zz"]),
   ]);
-  return { tar, unzip, sevenZip };
+  const sevenZipRar = sevenZip === null ? false : await probeRarCodec(sevenZip);
+  return { tar, unzip, sevenZip, sevenZipRar };
 }
 
 export function supportFrom(executables: Executables): ArchiveSupport {
@@ -88,6 +169,7 @@ export function supportFrom(executables: Executables): ArchiveSupport {
     zip: executables.unzip !== null || executables.sevenZip !== null,
     tar: executables.tar !== null,
     sevenZip: executables.sevenZip !== null,
+    rar: executables.sevenZip !== null && executables.sevenZipRar,
   };
 }
 
@@ -97,7 +179,7 @@ export function supportFrom(executables: Executables): ArchiveSupport {
 
 /**
  * The suffixes stripped to name the "extract into a subfolder" directory.
- * Longest first; the format itself comes from listing.ts#detectArchiveFormat.
+ * Longest first; the format itself comes from contract.ts#detectArchiveFormat.
  */
 const ARCHIVE_SUFFIXES: readonly string[] = [
   ".tar.gz",
@@ -110,6 +192,7 @@ const ARCHIVE_SUFFIXES: readonly string[] = [
   ".zip",
   ".tar",
   ".7z",
+  ".rar",
 ];
 
 /** `photos.tar.gz` → `photos`. Falls back to the full name. */
@@ -158,6 +241,9 @@ function planFor(
   }
 
   if (format === "7z") return sevenZipPlan();
+  // A 7z without the RAR codec lists a RAR fine and then fails on the first
+  // compressed member, so it does not count as an extractor for one.
+  if (format === "rar") return executables.sevenZipRar ? sevenZipPlan() : null;
 
   if (executables.tar === null) return null;
   return {
@@ -225,6 +311,8 @@ export interface ExtractArchiveInput {
 
 export interface ArchivesModule {
   extractArchive(input: ExtractArchiveInput): Promise<{ job: Job }>;
+  /** §8.13: the table of contents, read without extracting anything. */
+  listArchive(input: { path: string }): Promise<ArchiveListing>;
   /** Probed once at load; served verbatim in getState().archiveSupport. */
   readonly support: ArchiveSupport;
   /** Resolves when every extraction started so far has settled (tests). */
@@ -236,7 +324,18 @@ export interface ArchivesOptions {
   /** Accepted for symmetry with the other factories; unused today. */
   settings?: Pick<SettingsModule, "chunkSizeBytes">;
   spawnExtractor?: SpawnExtractor;
+  /** Test seams for the lister (src/archive-listing.ts). */
+  spawnLister?: SpawnLister;
+  listingLimits?: Partial<ListingLimits>;
   executables?: Executables;
+}
+
+/**
+ * Whether `extractArchive` would accept `format` on a host with these
+ * executables — the same plan probe it runs before promising a job.
+ */
+export function canExtractFormat(format: ArchiveFormat, executables: Executables): boolean {
+  return planFor(format, executables, "", "") !== null;
 }
 
 export async function createArchives(
@@ -247,6 +346,14 @@ export async function createArchives(
   const spawnExtractor = options.spawnExtractor ?? defaultSpawn;
   const executables = options.executables ?? (await probeExecutables());
   const support = supportFrom(executables);
+  // Built on the same probe, so "can list" and "can extract" never disagree
+  // about which tools this host has.
+  const lister = createArchiveLister(bb, {
+    executables,
+    canExtract: (format) => canExtractFormat(format, executables),
+    ...(options.spawnLister === undefined ? {} : { spawnLister: options.spawnLister }),
+    ...(options.listingLimits === undefined ? {} : { limits: options.listingLimits }),
+  });
   const running = new Set<Promise<void>>();
   /** jobId -> staging root of every extraction that is still on disk. */
   const staging = new Map<string, string>();
@@ -649,8 +756,8 @@ export async function createArchives(
   });
 
   bb.log.info(
-    `archive support — zip:${support.zip} tar:${support.tar} 7z:${support.sevenZip}`,
+    `archive support — zip:${support.zip} tar:${support.tar} 7z:${support.sevenZip} rar:${support.rar}`,
   );
 
-  return { extractArchive, support, idle };
+  return { extractArchive, listArchive: lister.listArchive, support, idle };
 }

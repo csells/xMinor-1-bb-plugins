@@ -18,13 +18,26 @@ every path is re-resolved and clamped on the server before a single byte moves.
   directory. Children are fetched on first open and cached afterwards.
 - **Upload** — drag and drop files or whole folders. Uploads are chunked,
   resumable, and keep running while you browse elsewhere in bb.
-- **Open a file to read it** — double-click (or `Enter`) hands the file to bb's
-  own preview panel, so it opens as a tab beside the manager instead of
-  landing in your downloads folder. A client with no preview panel downloads
-  it as before, and an archive still opens the extract dialog.
-- **Quick look** — `Space` on the selected row opens the same preview without
-  taking your hands off the keyboard. It never downloads and never opens a
-  folder, so holding `↓` and tapping `Space` is a way to skim a folder.
+- **Open a file to read it** — double-click, `Enter`, or **Open** in the
+  right-click menu. Beside a thread the file goes to bb's own preview panel, so
+  it opens as a tab next to the manager; on the standalone File Manager page,
+  where bb has no preview panel to offer, the plugin shows the file itself:
+  images, PDFs, video and audio play in place, Markdown is rendered (with the
+  source one click away), and everything else — including `Makefile`,
+  `LICENSE` and files with no extension at all — opens in bb's source viewer
+  with syntax highlighting. Anything that turns out not to be text says so and
+  offers the download. Double-clicking an archive still opens the extract
+  dialog.
+- **Quick look** — `Space` on the selected row does the same without taking
+  your hands off the keyboard. It never downloads and never opens a folder, so
+  holding `↓` and tapping `Space` is a way to skim a folder. On an archive it
+  shows what is inside.
+- **Look inside archives** — `zip`, `tar`, `tar.gz`, `tar.bz2`, `tar.xz`, `7z`
+  and `rar` open as a folder tree without being extracted: sizes, dates,
+  encrypted members marked, one summary line, and an *Extract…* button that
+  hands over to the ordinary extract dialog. Russian names from Windows zips
+  come out readable. The same view opens from a link to an archive in a chat
+  message.
 - **Gallery** — a grid of thumbnails instead of a list, for the folders where
   the file names are not the point. Images are shown, everything else keeps
   its type icon, and the choice is remembered.
@@ -39,9 +52,9 @@ every path is re-resolved and clamped on the server before a single byte moves.
 - **Organize** — new folder, rename, delete, cut / copy / paste, drag to move.
   Batch operations report a result per path, and name collisions become
   `name (1).ext` instead of silently overwriting.
-- **Extract archives** — `zip`, `tar`, `tar.gz`, `tar.bz2`, `tar.xz` and `7z`
-  extract as cancellable background jobs, into a staging directory that is
-  checked for containment before anything is committed.
+- **Extract archives** — `zip`, `tar`, `tar.gz`, `tar.bz2`, `tar.xz`, `7z`
+  and `rar` extract as cancellable background jobs, into a staging directory
+  that is checked for containment before anything is committed.
 - **Live refresh** — every mutation is published on a realtime channel, so a
   second open panel or a finishing background job updates the listing without
   polling.
@@ -135,16 +148,75 @@ automatically per extension, and the plugin has to claim extensions to appear
 in the menu at all. So the preview wrapper is what a plain click lands on: the
 file still opens as a preview, plus one button.
 
-What is claimed: text and docs, office files, config and data, code, web,
-images, audio, video, archives and packages, fonts and binaries — 200-odd
-extensions. Two things are outside it. `.pdf` is left to the pdf-viewer plugin,
-because two plugins claiming one extension makes bb's automatic pick depend on
-load order. And a name with no extension at all (`Makefile`, `LICENSE`,
-`.env`) gets no *Open with* rows from any plugin — bb matches openers by
-extension, so there is nothing for a plugin to claim.
+An archive is the exception, because bb's preview has nothing to show for one:
+a link to a `.zip`, `.tar.gz`, `.7z` or `.rar` opens its contents under the
+same strip (see [Look inside an archive](#look-inside-an-archive)). *Extract…*
+there switches the tab to the file manager, on the archive's folder, with the
+extract dialog already open.
+
+What is claimed: text, ebooks, config and data, code, web, images, audio,
+video, archives and packages, fonts and binaries — about 200 extensions. Two
+things are outside it. Documents — `.pdf`, Word, Excel and PowerPoint files
+(`.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`), their OpenDocument
+counterparts (`.odt`, `.ods`, `.odp`) and `.rtf` — are left to the doc-review
+plugin, which renders them and takes comments on them (it absorbed the former
+pdf-viewer): a preview here could not show them, so claiming them would only
+add a weaker choice to *Open with*. And a name with
+no extension at all (`Makefile`, `LICENSE`, `.env`) gets no *Open with* rows
+from any plugin — bb matches openers by extension, so there is nothing for a
+plugin to claim.
 
 To take an extension back, use **Settings → File openers** and pin *BB preview*
 for it.
+
+## Look inside an archive
+
+A `.zip` you were sent, the `.tar.gz` an agent just built, a `.rar` from a
+colleague — you can see what is in it before deciding whether to extract it,
+and without extracting anything.
+
+| Where | How |
+| --- | --- |
+| the file manager | select the archive and press `Space` (a double-click still opens the extract dialog) |
+| a chat message | click a link to the archive: the side panel shows its contents under the folder strip |
+
+What you get:
+
+- **A tree**, folders first and sorted by name, each with a chevron to open or
+  close it. If everything sits in one top folder — most archives do — that
+  folder is already open. Arrow keys walk the tree.
+- **Per member** the name, the uncompressed size and the modified date.
+  Password-protected members carry a lock; symlinks and tar hard links show
+  where they point.
+- **One summary line**: how many files and folders, the total uncompressed
+  size and the size of the archive itself, plus how many members are
+  encrypted.
+- **Extract…**, when this machine can unpack the format. It opens the same
+  extract dialog as everywhere else, so the job, its progress and its
+  cancel button are the ones you already know.
+
+Names are shown the way they were meant. A zip made by Windows Explorer on a
+Russian system stores names in the old DOS code page (CP866) without saying
+so, and Linux tools have to guess — `7z` shows such names as `����`; here they
+come out as `Отчёт за 2024`. Names with spaces, newlines or a leading dash are shown as
+they are, and a member called `../evil.txt` or `/etc/passwd` is shown exactly
+like that — listing never writes a single file, so such names are only ever
+displayed.
+
+Very large archives stay responsive: the first 10 000 members are shown and
+the rest are counted, with a note saying how many there are. Counting stops
+after a million members or ten seconds — a 20 GB `.tar.xz` has to be
+decompressed end to end just to be listed — and then the note says the
+numbers cover only what was read. A damaged or cut-short archive shows what
+could be read, with the reader's own complaint. An archive whose *file list*
+is itself password-protected (`7z -mhe`) says so instead of asking for the
+password.
+
+| Format | Read by |
+| --- | --- |
+| `zip` | the plugin itself — works with no tools installed |
+| `tar`, `tar.gz`, `tar.bz2`, `tar.xz` | GNU `tar` |
+| `7z`, `rar` | `7z` / `7za` / `7zz` |
 
 ## Hand a file to the agent
 
@@ -198,8 +270,8 @@ the folder — the two gestures are deliberately different.
 | `←` on an expanded folder | collapse it |
 | `←` on a nested row | move the cursor to its parent row |
 | `Alt`+`←`, `Backspace` | go up one directory |
-| `Enter` | open: a folder navigates in, a file opens in bb's preview panel, an archive opens the extract dialog |
-| `Space` | quick look: open the selected file in bb's preview panel. A folder does nothing — that is `Enter`'s job — and nothing is ever downloaded |
+| `Enter` | open: a folder navigates in, a file opens (bb's preview panel beside a thread, the built-in viewer otherwise), an archive opens the extract dialog |
+| `Space` | quick look: show the selected file the same way. A folder does nothing — that is `Enter`'s job — and nothing is ever downloaded |
 | `Shift`+`F10`, the Menu key | open the context menu for the row under the cursor (the empty-space menu when no row is focused) |
 | `Ctrl`/`Cmd`+`L` | edit the path: the crumbs become a text field with the full path selected |
 | `Escape` | clear the selection (in the path bar it cancels, in the filter box it clears the filter) |
@@ -303,7 +375,9 @@ list yet; `Tab` is deliberately still the browser's.
 
 ## Where the panel opens
 
-In order: an explicit link wins, then the folder you were last in, then the
+In order: an explicit link wins, then — with **Open the thread's project
+folder** on, and only in a File Manager tab opened inside a thread — that
+thread's own project folder, then the folder you were last in, then the
 configured start folder.
 
 The last folder is remembered from the listing the server actually answered
@@ -391,6 +465,11 @@ the last folder*, which is one browser profile's memory of a moment.
 - Archive extraction shells out to `tar`, `unzip` and `7z`/`7za`/`7zz`. Formats
   whose tool is missing are reported as unsupported instead of failing at
   extraction time; everything else works without them.
+- Looking inside an archive needs GNU `tar` for the tar family and `7z` for
+  `7z` and `rar`; zip needs nothing. Every `7z` *lists* RAR archives, but
+  extracting one needs a build with the RAR codec — Debian and Ubuntu ship it
+  separately as `7zip-rar`. Without it, `rar` archives open for viewing and
+  offer no *Extract…*.
 
 ## Install
 
@@ -406,7 +485,7 @@ Straight from git, which builds during install — the released tag, or the tip
 of `main`:
 
 ```bash
-bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.7.0 \
+bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@^0.9.0 \
   --plugin file-manager --tag-prefix file-manager/
 bb plugin install git:https://github.com/xMinor-1/bb-plugins.git@main --plugin file-manager
 ```
@@ -433,6 +512,7 @@ Change them in bb's settings UI, from the panel, or with
 | --- | --- | --- | --- |
 | `startFolder` | string | home folder | Absolute path under the root the panel opens on its first open, after you forget the remembered folder, and whenever the last folder is gone — or every time, with `restoreLastFolder` off. Shown in the form as **Start folder (typed path)**, and set with a folder browser by the **Start folder** section below it. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
 | `restoreLastFolder` | boolean | `true` | Reopen the folder you were last in instead of the start folder. |
+| `openThreadWorkspace` | boolean | `false` | Open a File Manager tab inside a thread in that thread's project folder — its environment checkout — instead of the remembered or start folder. Ignored where there is no thread (the nav panel, the New thread launcher, the file openers) and wherever the thread has no environment, no folder on disk, or a folder outside the root; those fall back to the ordinary choice. |
 | `showHiddenFiles` | boolean | `false` | Show dot-files and dot-directories. |
 | `confirmOnDelete` | boolean | `true` | Ask before deleting. |
 | `sortField` | `name` \| `size` \| `modified` \| `kind` | `name` | Default sort column. |
@@ -544,6 +624,12 @@ Within that boundary:
 - **Upload staging is contained.** In-flight parts live in
   `<root>/.bb-file-manager/uploads/`, and that directory is filtered out of
   every listing, including with hidden files shown.
+- **Looking inside an archive writes nothing.** A zip's table of contents is
+  read inside the plugin; `tar` and `7z` only ever run their *list* command,
+  with the archive path after `--file` / `--`, stdin closed, and a hard time
+  limit after which they are killed. Member names are displayed, never used as
+  paths. The archive itself goes through the same root clamp as every other
+  read.
 - **Archive extraction is defensive.** Extractors run with
   `--no-same-owner --no-same-permissions` into a per-job staging directory;
   every extracted entry is re-checked for containment, and a member that would
@@ -574,13 +660,15 @@ every save.
 | Path | Contents |
 | --- | --- |
 | `server.ts` | backend entry: settings, RPC registration, HTTP routes, upload GC schedule |
-| `src/` | path safety, listing, mutations, uploads, archives, jobs |
+| `src/` | path safety, listing, mutations, uploads, archives (extraction and listing), jobs |
 | `contract.ts` | the RPC contract shared by both sides; it is frozen and edited by nobody |
 | `app.tsx`, `components/`, `hooks/`, `lib/` | the panel, the panel tabs and the settings section |
 | `components/FileManagerTab.tsx`, `hooks/useFmLocation.ts`, `components/PanelActions.tsx` | the panel-tab surface: state-held location and the compact action cluster |
 | `components/FileLocationOpener.tsx`, `src/locate.ts` | the two `fileOpener` slots and the path resolution behind them |
 | `components/SettingsSection.tsx`, `lib/start-folder.ts` | the `settingsSection` slot and the start-folder logic it shares with the panel |
 | `src/properties.ts`, `components/dialogs/PropertiesDialog.tsx` | the Properties dialog: one lstat for a path, and the bounded recursive walk behind "Calculate size" |
+| `src/archive-listing.ts`, `src/archive-parse.ts` | looking inside an archive: the bounded, read-only listers (yauzl for zip, `tar -tv`, `7z l`) and the pure parsers and name decoding behind them |
+| `components/ArchiveContents.tsx`, `lib/archive-tree.ts` | the archive tree shown by the built-in viewer and by the file opener |
 | `lib/fm-tree.ts`, `hooks/useTree.ts` | the folder tree: a pure reducer plus the lazy loader around it |
 | `components/FileGallery.tsx`, `lib/preview.ts`, `hooks/usePreviewBase.ts`, `src/preview.ts` | the gallery: the tile grid, what has a thumbnail, and the short-lived folder URL they stream from |
 | `lib/fm-store.ts` | the two-tier client store (module scope over `localStorage`) both the expanded set and the location memory use |
@@ -605,13 +693,14 @@ The BB Community catalog entry is *not* kept in this directory. It lives as
 `entries/file-manager.json` in
 [get-bb/marketplace](https://github.com/get-bb/marketplace) — filed as
 [PR #90](https://github.com/get-bb/marketplace/pull/90), widened to the 0.7.x
-line in [PR #122](https://github.com/get-bb/marketplace/pull/122) — and that
+line in [PR #122](https://github.com/get-bb/marketplace/pull/122) and to 0.8.x
+in [PR #196](https://github.com/get-bb/marketplace/pull/196) — and that
 copy is the source of truth; a draft next to the code only goes stale, as it
 did between 0.2.0 and 0.3.0. The entry resolves a source range against this
 repository's tags, so any release inside that range reaches the catalog on its
-own. On a `0.x` line `^0.7.0` covers `0.7.x` only, so the next minor needs a
-new pull request there — as do moving the source, or changing the id, display
-name, description, tags or icon.
+own. On a `0.x` line `^0.8.0` covers `0.8.x` only, so **0.9.0 is not yet in the
+catalog range** and needs a pull request widening it — as do moving the source,
+or changing the id, display name, description, tags or icon.
 
 ## License
 

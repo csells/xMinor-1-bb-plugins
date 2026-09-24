@@ -69,6 +69,11 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
    * copy in this section wrong until it is re-read.
    */
   const rawRestoreLastFolder = hostSettings?.restoreLastFolder;
+  /**
+   * The third: with `openThreadWorkspace` on, a thread's tab skips both folders
+   * and the copy below says so — which it can only do after a re-read.
+   */
+  const rawOpenThreadWorkspace = hostSettings?.openThreadWorkspace;
 
   const [state, setState] = useState<PanelState | null>(null);
   /**
@@ -149,19 +154,26 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
   // Someone else wrote the setting (the form above, the panel, the CLI, another
   // window): the host has already refetched its copy, so re-read the state the
   // section shows. The first delivery is the query resolving, not a change.
-  const lastRawRef = useRef<string | boolean | undefined>(undefined);
+  const lastRawRef = useRef<string | number | boolean | undefined>(undefined);
   useEffect(() => {
     const previous = lastRawRef.current;
     lastRawRef.current = rawStartFolder;
     if (isExternalSettingChange(previous, rawStartFolder)) refresh();
   }, [rawStartFolder, refresh]);
 
-  const lastRawRestoreRef = useRef<string | boolean | undefined>(undefined);
+  const lastRawRestoreRef = useRef<string | number | boolean | undefined>(undefined);
   useEffect(() => {
     const previous = lastRawRestoreRef.current;
     lastRawRestoreRef.current = rawRestoreLastFolder;
     if (isExternalBooleanSettingChange(previous, rawRestoreLastFolder)) refresh();
   }, [rawRestoreLastFolder, refresh]);
+
+  const lastRawThreadFolderRef = useRef<string | number | boolean | undefined>(undefined);
+  useEffect(() => {
+    const previous = lastRawThreadFolderRef.current;
+    lastRawThreadFolderRef.current = rawOpenThreadWorkspace;
+    if (isExternalBooleanSettingChange(previous, rawOpenThreadWorkspace)) refresh();
+  }, [rawOpenThreadWorkspace, refresh]);
 
   // Coming back to the page refreshes too: a broadcast can be missed while the
   // socket is down, and a start folder can stop existing (deleted, renamed)
@@ -340,6 +352,12 @@ export function SettingsSection(_props: PluginSettingsSectionProps) {
             : state.preferences.restoreLastFolder
               ? "Reopening the last folder is on, so this is where the panel opens the first time and whenever the last folder is gone."
               : "Reopening the last folder is off, so the panel always opens here."}
+          {/* The thread-folder toggle outranks both of the rules above, but
+              only on a thread's panel tab — saying so here is the only place
+              the two settings are seen together. */}
+          {state !== null && state.preferences.openThreadWorkspace
+            ? " Opening the thread's project folder is on, so a File Manager tab inside a thread starts in that thread's folder instead."
+            : null}
           {root === null ? null : ` Everything stays inside ${root}.`}
         </p>
         <div className="flex shrink-0 items-center gap-3">

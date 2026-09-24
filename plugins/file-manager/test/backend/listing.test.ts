@@ -52,6 +52,8 @@ describe("detectArchiveFormat", () => {
     ["backup.tar.xz", "tar.xz"],
     ["backup.txz", "tar.xz"],
     ["blob.7z", "7z"],
+    ["scans.RAR", "rar"],
+    ["backup.tbz", "tar.bz2"],
   ])("maps %s to %s", (name, format) => {
     expect(detectArchiveFormat(name)).toBe(format);
   });

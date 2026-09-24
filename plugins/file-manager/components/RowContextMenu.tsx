@@ -1,4 +1,13 @@
-// components/RowContextMenu.tsx — desktop renderer for selected-entry actions.
+// components/RowContextMenu.tsx — right-click menu for the current selection.
+//
+// Renders only the `<ContextMenuContent>`: the panel owns one Radix
+// ContextMenu root around the whole table, and swaps this component for
+// BackgroundContextMenu depending on where the click landed. One root avoids
+// the double-open you get when a per-row trigger and a container trigger both
+// see the same `contextmenu` event.
+//
+// What the menu offers comes from `selectedEntryActionModel`, which the touch
+// surface (SelectionActionBar) shares; this file only paints it.
 import { Fragment } from "react";
 
 import { useMenuPointerGuard } from "../hooks/useMenuPointerGuard";
@@ -19,6 +28,7 @@ export type RowContextMenuProps = SelectedEntryActionsProps;
 
 export function RowContextMenu(props: RowContextMenuProps) {
   const model = selectedEntryActionModel(props);
+  // Letting go of the right button must not run whatever it landed on.
   const pointerGuard = useMenuPointerGuard();
 
   return (

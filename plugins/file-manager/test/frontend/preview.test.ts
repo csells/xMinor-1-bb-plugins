@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FileEntry } from "../../contract";
 import { isImageEntry, isImageName, previewUrl } from "../../lib/preview";
+import { isViewableEntry, viewerKindFor } from "../../lib/viewer";
 
 function entry(partial: Partial<FileEntry> & { name: string }): FileEntry {
   return {
@@ -105,5 +106,56 @@ describe("previewUrl", () => {
 
   it("answers the base itself for an empty relative path", () => {
     expect(previewUrl("https://bb.test/p/tok", "")).toBe("https://bb.test/p/tok");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lib/viewer.ts — which renderer the built-in viewer reaches for (§8.12).
+// ---------------------------------------------------------------------------
+
+describe("viewerKindFor", () => {
+  it("names the four kinds a browser paints from a URL", () => {
+    expect(viewerKindFor("shot.PNG")).toBe("image");
+    expect(viewerKindFor("scan.svg")).toBe("image");
+    expect(viewerKindFor("manual.pdf")).toBe("pdf");
+    expect(viewerKindFor("clip.MP4")).toBe("video");
+    expect(viewerKindFor("song.flac")).toBe("audio");
+  });
+
+  it("keeps markdown apart, so it can be rendered as a document", () => {
+    expect(viewerKindFor("README.md")).toBe("markdown");
+    expect(viewerKindFor("notes.markdown")).toBe("markdown");
+    expect(viewerKindFor("page.mdx")).toBe("markdown");
+  });
+
+  it("sends everything else to the text branch, extension or not", () => {
+    // `text` is a question for the server, not a claim about the file — which
+    // is the only way these four ever open.
+    for (const name of ["Makefile", "LICENSE", ".gitignore", "server.ts"]) {
+      expect(viewerKindFor(name)).toBe("text");
+    }
+    // Including the ones that will come back "not text": guessing from the
+    // name would only move the same answer earlier and get it wrong more often.
+    expect(viewerKindFor("tool.bin")).toBe("text");
+    expect(viewerKindFor("bundle.zip")).toBe("text");
+  });
+
+  it("leaves the containers a browser cannot play to the text branch", () => {
+    // A `<video>` that paints a black rectangle is worse than the download
+    // offer the text branch ends in.
+    expect(viewerKindFor("film.mkv")).toBe("text");
+    expect(viewerKindFor("old.avi")).toBe("text");
+  });
+});
+
+describe("isViewableEntry", () => {
+  it("takes files and symlinks to files, and nothing else", () => {
+    expect(isViewableEntry(entry({ name: "a.txt" }))).toBe(true);
+    expect(
+      isViewableEntry(entry({ name: "link", isSymlink: true, kind: "symlink", targetKind: "file" })),
+    ).toBe(true);
+    expect(isViewableEntry(entry({ name: "docs", kind: "directory" }))).toBe(false);
+    expect(isViewableEntry(entry({ name: "pipe", kind: "other" }))).toBe(false);
+    expect(isViewableEntry(entry({ name: "out.txt", escapesRoot: true }))).toBe(false);
   });
 });
