@@ -308,6 +308,16 @@ describe("compact viewport selection actions", () => {
     expect(slot.queryByTestId("fm-selection-bar")).toBeNull();
   });
 
+  it("shows the bar in a narrow mouse-driven window but keeps dragging", async () => {
+    const slot = await mountPanelForInteraction({ compact: true, coarsePointer: false });
+    const row = rowFor(slot, NOTES.path);
+
+    fireEvent.click(within(row).getByRole("checkbox"));
+
+    expect(row.draggable).toBe(true);
+    expect(slot.getByTestId("fm-selection-bar").textContent).toContain("1 selected");
+  });
+
   it("uses touch actions on a wide coarse-pointer device", async () => {
     const slot = await mountPanelForInteraction({ compact: false, coarsePointer: true });
     const row = rowFor(slot, NOTES.path);

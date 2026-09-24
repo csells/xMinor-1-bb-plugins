@@ -285,10 +285,11 @@ to the folder that row lives in.
 
 On a compact layout or a coarse-pointer device, tick a row or tile to reveal a
 persistent selection bar. **Actions** opens the selected-item menu as a bottom
-drawer; **Clear selection** removes the ticks. Native row dragging is disabled
-there so a long press cannot turn the item into a browser drag ghost. This also
-covers landscape phones and tablets; desktop row dragging and right-click menus
-are unchanged.
+drawer; **Clear selection** removes the ticks. On a touch device native row
+dragging is disabled, so a long press cannot turn the item into a browser drag
+ghost. This also covers landscape phones and tablets; a narrow desktop window
+driven by a mouse gets the bar and keeps dragging, and right-click menus are
+unchanged.
 
 Three behaviors worth knowing:
 

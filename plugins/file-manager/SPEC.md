@@ -1174,11 +1174,12 @@ when the event target is an `input`, `textarea` or `[contenteditable]`.
 
 **Internal (row → folder)**
 
-* Rows are `draggable` only outside compact layouts and coarse primary-pointer
-  devices. Those touch-oriented surfaces disable native row/tile dragging so
-  long-press cannot enter browser drag mode; selected-item operations remain
-  available from `SelectionActionBar`. Pointer capability is independent of
-  viewport width, so landscape phones and tablets follow the touch path too.
+* Rows are `draggable` everywhere except on a coarse primary pointer. Touch
+  devices disable native row/tile dragging so long-press cannot enter browser
+  drag mode; selected-item operations remain available from
+  `SelectionActionBar`. Pointer capability is independent of viewport width, so
+  landscape phones and tablets follow the touch path too, and a compact window
+  driven by a mouse shows the bar but keeps dragging.
 * `RowContextMenu` and `SelectionActionBar` render the same action groups from
   `selectedEntryActionModel`; visibility, enablement, order and callbacks are
   not reimplemented per surface.
@@ -2033,7 +2034,7 @@ first line plus the `matchMedia` / `scrollIntoView` stubs in the setup file.
 | `registration.test.tsx` | `app.navPanels[0]` matches `{ id: "file-manager", title: "File Manager", icon: "FolderOpen", path: "files" }`; `headerContent` and `experimental_sidebarAccessory` are functions |
 | `panel.test.tsx` | renders rows from a stubbed `listDir`; hidden toggle re-issues `listDir` with `showHidden: true`; sorting by size reorders without an RPC; search filters client-side; `emitRealtime("fs", { paths:[cwd] })` triggers exactly one refetch; `setRealtimeConnectionState("connected")` refetches |
 | `selection.test.tsx` | click / ctrl-click / shift-click / `Ctrl+A` / `Escape` produce the expected selections |
-| `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed; compact and wide coarse-pointer selection disable native row/tile dragging and expose the responsive drawer; desktop remains draggable; desktop and touch action IDs and disabled states stay in parity |
+| `menus.test.tsx` | right-click on a file shows Download/Rename/Cut/Copy/Delete; Delete opens the confirm dialog when `confirmOnDelete`, calls `deleteEntries` when confirmed; coarse-pointer selection (compact or wide) disables native row/tile dragging and exposes the responsive drawer; a compact fine-pointer window shows the bar and stays draggable; desktop remains draggable; desktop and touch action IDs and disabled states stay in parity |
 | `uploads.test.tsx` | dropping two `File`s calls `uploadCreate` twice and posts chunks in order (stub `XMLHttpRequest`); a 409 response resumes from `expected`; the tray shows percentages |
 | `viewer.test.tsx` | §8.12: markdown renders through bb's `Markdown` and toggles to `experimental_SourceCode`; every other text file goes straight to the source viewer, including one with no extension; an image / PDF / video / audio hangs off the folder's preview URL with its name percent-encoded and never calls `readTextFile`; `unsupported` renders the download offer while `permission_denied` renders a failure; a host that *does* take the preview never opens the dialog at all |
 | `archive-viewer.test.tsx` | §8.13 in the panel: `Space` on an archive shows its tree (never `readTextFile`); folders first by name with the lone top folder open; click and arrow keys open and close folders; the summary line, the lock and the link target; the truncated, damaged, timed-out, empty, failed and unsupported states; Extract… swaps the viewer for `ExtractDialog` and starts `extractArchive`, and is absent when not `extractable`; a double click still extracts; a previewing host still gets the archive |

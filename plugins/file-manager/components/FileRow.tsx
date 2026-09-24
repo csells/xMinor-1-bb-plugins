@@ -59,7 +59,7 @@ export function rowDomId(path: string): string {
 
 export interface FileRowProps {
   entry: FileEntry;
-  /** Native file dragging is disabled on compact touch-oriented layouts. */
+  /** False on a touch (coarse) pointer, where a long press would start a drag. */
   dragEnabled: boolean;
   /** 0 for a row of the current directory; +1 per expanded ancestor. */
   depth: number;

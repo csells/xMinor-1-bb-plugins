@@ -407,7 +407,12 @@ export function FileManagerSurface({
   const rpc = useFmRpc();
   const isCompactViewport = useIsCompactViewport();
   const isCoarsePointer = useIsCoarsePointer();
-  const touchActionsEnabled = isCompactViewport || isCoarsePointer;
+  // The selection bar helps wherever a right-click is unlikely: a phone, a
+  // tablet, or a window too narrow for bb's desktop layout. Native dragging is
+  // switched off only for a touch pointer, where a long press would turn the
+  // row into a drag ghost; a narrow window driven by a mouse still drags.
+  const selectionBarEnabled = isCompactViewport || isCoarsePointer;
+  const rowDragEnabled = !isCoarsePointer;
   const subPath = location.subPath;
   const locationRef = useRef(location);
   locationRef.current = location;
@@ -2466,7 +2471,7 @@ export function FileManagerSurface({
         pathFocusTick={pathFocusTick}
       />
 
-      {touchActionsEnabled && selectedEntries.length > 0 ? (
+      {selectionBarEnabled && selectedEntries.length > 0 ? (
         <SelectionActionBar
           {...selectedActionProps}
           onClear={selection.clear}
@@ -2533,7 +2538,7 @@ export function FileManagerSurface({
                 selectedPaths={selection.selected}
                 focusedPath={selection.focus}
                 cutPaths={cutPaths}
-                dragEnabled={!touchActionsEnabled}
+                dragEnabled={rowDragEnabled}
                 dropTargetPath={dropTarget}
                 previewBaseUrl={previewBaseUrl}
                 parentPath={parentPath}
@@ -2560,7 +2565,7 @@ export function FileManagerSurface({
                 selectedPaths={selection.selected}
                 focusedPath={selection.focus}
                 cutPaths={cutPaths}
-                dragEnabled={!touchActionsEnabled}
+                dragEnabled={rowDragEnabled}
                 sortField={sortField}
                 sortDirection={sortDirection}
                 onSort={handleHeaderSort}
