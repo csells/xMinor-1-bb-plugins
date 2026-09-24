@@ -408,6 +408,8 @@ export function FileManagerSurface({
   // Read once: the bootstrap runs once, and a later prop change must not drag
   // the panel back to where it started while the user is somewhere else.
   const initialPathRef = useRef(initialPath);
+  /** Same reason: the bootstrap asks which thread it opened in, once. */
+  const bootstrapThreadIdRef = useRef(threadId);
 
   const [state, setState] = useState<GetState | null>(null);
   /** Read from callbacks that must not re-create themselves per bootstrap. */
@@ -561,9 +563,28 @@ export function FileManagerSurface({
           }
           return;
         }
+        // The thread's own project folder, when this surface has a thread and
+        // the preference is on (§1.5). One extra round trip before the first
+        // listing, and only on the surfaces and setting that ask for it: the
+        // nav panel, the New thread launcher and the openers have no thread,
+        // so they never pay for it. Every "no" answer — no environment, no
+        // checkout, outside the root, or a lookup that failed outright —
+        // leaves the folder null and the decision as it was.
+        const bootstrapThreadId = bootstrapThreadIdRef.current;
+        let workspaceFolder: string | null = null;
+        if (result.preferences.openThreadWorkspace && bootstrapThreadId !== null) {
+          const answer = await rpc
+            .call("threadWorkspace", { threadId: bootstrapThreadId })
+            .catch(() => null);
+          if (cancelled) return;
+          if (answer !== null && answer.reason === null && answer.path !== null) {
+            workspaceFolder = answer.path;
+          }
+        }
         const choice = pickInitialFolder({
           subPath: subPathRef.current,
           remembered: readLastFolder(),
+          workspaceFolder,
           startFolder: result.startFolder,
           root: result.root,
           restoreLastFolder: result.preferences.restoreLastFolder,

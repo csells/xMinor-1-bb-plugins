@@ -1961,6 +1961,32 @@ move uses — a second navigation path would be a second set of bugs. A lookup
 that *failed* keeps the button live, because "bb did not answer" is not "there
 is nowhere to go": the click retries once, and only then becomes a toast.
 
+**Opening there without the click (v0.9.1).** `openThreadWorkspace` — a
+`boolean` descriptor, default `false`, carried in `getState().preferences`
+beside `restoreLastFolder` and for the same reason (§7.1: the panel decides
+where to open in the tick `getState` lands) — makes the *bootstrap* ask the
+same question the toolbar asks, and open the answer.
+
+The lookup is the one place the bootstrap may wait on a second round trip, and
+it is spent only where it can pay off: the preference is on **and** the surface
+has a `threadId`, read once through a ref like `initialPath` is, so a later
+prop change cannot drag a user who has since navigated back to the checkout.
+Every "no" — all three `reason`s, and a lookup that threw — leaves the folder
+`null`, and the decision is the one it was before the preference existed.
+
+`pickInitialFolder` gains `workspaceFolder: string | null` and a `"workspace"`
+source, ranked **below a deep link and above the memory**: the memory is one
+value shared by every surface, so letting it win would mean the first thread
+you opened decides where every later thread's panel opens. The §6 prefix test
+is applied there as well as at the caller — `threadWorkspace` reports an
+`outside_root` checkout rather than hiding it, and redirecting to it would
+strand the panel in a folder it may not list.
+
+The toolbar button stays exactly as it is. With the preference on it opens the
+folder it would have jumped to, which makes it a no-op *and* the way back after
+the user has moved elsewhere; with the preference off nothing about §10.3
+changes.
+
 ---
 
 ## 11. Test plan

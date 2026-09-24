@@ -90,6 +90,7 @@ function preferences(viewMode: "list" | "gallery") {
     showHiddenFiles: false,
     confirmOnDelete: true,
     restoreLastFolder: true,
+    openThreadWorkspace: false,
     sortField: "name" as const,
     sortDirection: "asc" as const,
     viewMode,

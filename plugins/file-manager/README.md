@@ -365,7 +365,9 @@ list yet; `Tab` is deliberately still the browser's.
 
 ## Where the panel opens
 
-In order: an explicit link wins, then the folder you were last in, then the
+In order: an explicit link wins, then — with **Open the thread's project
+folder** on, and only in a File Manager tab opened inside a thread — that
+thread's own project folder, then the folder you were last in, then the
 configured start folder.
 
 The last folder is remembered from the listing the server actually answered
@@ -500,6 +502,7 @@ Change them in bb's settings UI, from the panel, or with
 | --- | --- | --- | --- |
 | `startFolder` | string | home folder | Absolute path under the root the panel opens on its first open, after you forget the remembered folder, and whenever the last folder is gone — or every time, with `restoreLastFolder` off. Shown in the form as **Start folder (typed path)**, and set with a folder browser by the **Start folder** section below it. Re-validated on every read; a deleted or out-of-root path falls back to the root. |
 | `restoreLastFolder` | boolean | `true` | Reopen the folder you were last in instead of the start folder. |
+| `openThreadWorkspace` | boolean | `false` | Open a File Manager tab inside a thread in that thread's project folder — its environment checkout — instead of the remembered or start folder. Ignored where there is no thread (the nav panel, the New thread launcher, the file openers) and wherever the thread has no environment, no folder on disk, or a folder outside the root; those fall back to the ordinary choice. |
 | `showHiddenFiles` | boolean | `false` | Show dot-files and dot-directories. |
 | `confirmOnDelete` | boolean | `true` | Ask before deleting. |
 | `sortField` | `name` \| `size` \| `modified` \| `kind` | `name` | Default sort column. |

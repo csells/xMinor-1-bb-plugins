@@ -23,7 +23,7 @@ import { createUploads } from "./src/uploads";
 import { registerHttpRoutes } from "./src/http-routes";
 
 /** Kept in sync with package.json#version by hand, like the first-party plugins. */
-export const PLUGIN_VERSION = "0.9.0";
+export const PLUGIN_VERSION = "0.9.1";
 export const PLUGIN_NAME = "File Manager";
 
 /** §5.2: hourly sweep of upload sessions whose part file is older than 24 h. */

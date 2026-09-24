@@ -97,6 +97,7 @@ const PREFERENCES: Preferences = {
   showHiddenFiles: false,
   confirmOnDelete: true,
   restoreLastFolder: true,
+  openThreadWorkspace: false,
   sortField: "name",
   sortDirection: "asc",
   viewMode: "list",
@@ -252,9 +253,11 @@ describe("pickInitialFolder (§1.5)", () => {
   const base = {
     subPath: "",
     remembered: { path: DOCS, root: ROOT },
+    workspaceFolder: null,
     startFolder: SITE,
     root: ROOT,
     restoreLastFolder: true,
+    openThreadWorkspace: false,
   };
 
   it("puts a deep link first, whatever the memory says", () => {
@@ -295,6 +298,37 @@ describe("pickInitialFolder (§1.5)", () => {
     expect(
       pickInitialFolder({ ...base, remembered: { path: `${ROOT}/docs/./notes/`, root: ROOT } }),
     ).toEqual({ path: `${DOCS}/notes`, source: "memory" });
+  });
+
+  it("puts the thread's folder above the memory and the start folder", () => {
+    expect(pickInitialFolder({ ...base, workspaceFolder: PICTURES })).toEqual({
+      path: PICTURES,
+      source: "workspace",
+    });
+    expect(
+      pickInitialFolder({ ...base, workspaceFolder: PICTURES, restoreLastFolder: false }),
+    ).toEqual({ path: PICTURES, source: "workspace" });
+  });
+
+  it("still loses to a deep link, which is what the user just asked for", () => {
+    expect(pickInitialFolder({ ...base, workspaceFolder: SITE, subPath: "pictures" })).toEqual({
+      path: PICTURES,
+      source: "deep-link",
+    });
+  });
+
+  it("ignores a thread folder outside the root, which §6 forbids opening", () => {
+    expect(pickInitialFolder({ ...base, workspaceFolder: "/etc" }).source).toBe("memory");
+    expect(pickInitialFolder({ ...base, workspaceFolder: `${ROOT}/../other` }).source).toBe(
+      "memory",
+    );
+  });
+
+  it("normalizes the thread folder as well", () => {
+    expect(pickInitialFolder({ ...base, workspaceFolder: `${ROOT}/docs/./notes/` })).toEqual({
+      path: `${DOCS}/notes`,
+      source: "workspace",
+    });
   });
 });
 

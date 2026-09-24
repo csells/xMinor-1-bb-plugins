@@ -32,7 +32,7 @@ vi.mock("sonner", () => ({
 const app = await loadPluginApp(() => import("../../app"));
 const { resetUploadManager } = await import("../../hooks/useUploads");
 const { resetPanelSnapshot } = await import("../../components/panel-bus");
-const { resetLastFolderStore } = await import("../../lib/last-folder");
+const { resetLastFolderStore, writeLastFolder } = await import("../../lib/last-folder");
 
 const threadAction = app.threadPanelActions[0]!;
 const newThreadAction = app.newThreadPanelActions[0]!;
@@ -65,6 +65,7 @@ const PREFERENCES = {
   showHiddenFiles: false,
   confirmOnDelete: true,
   restoreLastFolder: true,
+  openThreadWorkspace: false,
   sortField: "name" as const,
   sortDirection: "asc" as const,
   viewMode: "list" as const,
@@ -296,5 +297,103 @@ describe("thread folder (§10.3)", () => {
     await waitFor(() => {
       expect(slot.queryByTestId("fm-panel-thread-folder")).toBeNull();
     });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+
+describe("opening in the thread's folder (§1.5)", () => {
+  const DOCS = `${ROOT}/documents`;
+
+  /** `baseRpc`, with the preference on. */
+  function withPreferenceOn(
+    overrides: Partial<PluginRpcTestHandlers<FileManagerContract>> = {},
+  ): Partial<PluginRpcTestHandlers<FileManagerContract>> {
+    const base = baseRpc(overrides);
+    return {
+      ...base,
+      getState: () => ({
+        ...(base.getState as () => ReturnType<NonNullable<typeof base.getState>>)(),
+        preferences: { ...PREFERENCES, openThreadWorkspace: true },
+      }),
+      ...overrides,
+    };
+  }
+
+  it("starts a thread's tab in that thread's checkout, with no click", async () => {
+    const slot = mountTab(withPreferenceOn());
+
+    await waitFor(() => {
+      expect(currentPath(slot)).toBe(WORKTREE);
+    });
+    expect(await slot.findByText("README.md")).toBeDefined();
+  });
+
+  it("outranks the remembered folder, which is one value for every thread", async () => {
+    writeLastFolder({ path: DOCS, root: ROOT });
+    const slot = mountTab(withPreferenceOn());
+
+    await waitFor(() => {
+      expect(currentPath(slot)).toBe(WORKTREE);
+    });
+    // The remembered folder is never listed: the panel goes straight to the
+    // checkout rather than opening DOCS and jumping a moment later.
+    expect(
+      slot.inspection.rpcCalls.filter(
+        (call) => call.method === "listDir" && (call.input as { path: string }).path === DOCS,
+      ),
+    ).toEqual([]);
+    expect(await slot.findByText("README.md")).toBeDefined();
+  });
+
+  it("falls back to the ordinary choice when the thread has no folder", async () => {
+    const slot = mountTab(
+      withPreferenceOn({
+        threadWorkspace: () => ({ path: null, insideRoot: false, reason: "no_environment" }),
+      }),
+    );
+
+    await slot.findByText("notes.txt");
+    expect(currentPath(slot)).toBe(ROOT);
+  });
+
+  it("falls back when the lookup fails outright, rather than showing nothing", async () => {
+    const slot = mountTab(
+      withPreferenceOn({
+        threadWorkspace: () => {
+          throw new Error("io_error: bb is restarting");
+        },
+      }),
+    );
+
+    await slot.findByText("notes.txt");
+    expect(currentPath(slot)).toBe(ROOT);
+  });
+
+  it("leaves the nav panel alone: it has no thread to be in", async () => {
+    const navPanel = app.navPanels[0]!;
+    const slot = renderSlot(
+      { component: navPanel.component },
+      { subPath: "" },
+      { rpc: withPreferenceOn() as PluginRpcTestHandlers<FileManagerContract> },
+    ) as RenderedSlot;
+
+    await slot.findByText("notes.txt");
+    expect(currentPath(slot)).toBe(ROOT);
+    expect(
+      slot.inspection.rpcCalls.filter((call) => call.method === "threadWorkspace"),
+    ).toEqual([]);
+  });
+
+  it("does not ask at all with the preference off", async () => {
+    const slot = mountTab();
+    await slot.findByText("notes.txt");
+
+    expect(currentPath(slot)).toBe(ROOT);
+    // The toolbar's own §10.3 lookup still runs; the bootstrap's does not, so
+    // the count stays at the one call the button needs.
+    expect(
+      slot.inspection.rpcCalls.filter((call) => call.method === "threadWorkspace"),
+    ).toHaveLength(1);
   });
 });

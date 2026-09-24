@@ -76,7 +76,7 @@ export function resetLastFolderStore(): void {
 /* The decision (§1.5)                                                 */
 /* ------------------------------------------------------------------ */
 
-export type InitialFolderSource = "deep-link" | "memory" | "start-folder";
+export type InitialFolderSource = "deep-link" | "workspace" | "memory" | "start-folder";
 
 export interface InitialFolderChoice {
   /** Absolute path the panel should open. */
@@ -88,6 +88,14 @@ export interface PickInitialFolderArgs {
   /** The panel's `subPath` prop as delivered by the host. */
   subPath: string;
   remembered: RememberedFolder | null;
+  /**
+   * The thread's project folder, when the surface has a thread, the
+   * `openThreadWorkspace` preference is on and `threadWorkspace` answered with
+   * an openable path. Null in every other case — including a thread with no
+   * environment, no checkout, or a checkout outside the root — and then the
+   * decision is the one it was before the preference existed.
+   */
+  workspaceFolder: string | null;
   /** `getState().startFolder` — already validated by the backend. */
   startFolder: string;
   /** `getState().root`. */
@@ -97,8 +105,13 @@ export interface PickInitialFolderArgs {
 }
 
 /**
- * Where the panel opens, in priority order: an explicit link, then the memory,
- * then the configured start folder.
+ * Where the panel opens, in priority order: an explicit link, then the
+ * thread's project folder, then the memory, then the configured start folder.
+ *
+ * The project folder outranks the memory on purpose: it is a per-thread
+ * answer, and a remembered folder is one global value shared by every surface,
+ * so letting the memory win would mean the first thread you visited decides
+ * where every later thread's panel opens.
  *
  * `isInsideRoot` is called with the *explicit* root, never with its default
  * argument: the default reads `getClientRoot()`, which is still "/" until the
@@ -111,10 +124,16 @@ export interface PickInitialFolderArgs {
  * escape hatch, and a sentinel segment in every URL is a worse price (§1.5).
  */
 export function pickInitialFolder(args: PickInitialFolderArgs): InitialFolderChoice {
-  const { subPath, remembered, startFolder, root, restoreLastFolder } = args;
+  const { subPath, remembered, workspaceFolder, startFolder, root, restoreLastFolder } = args;
 
   if (subPath !== "") {
     return { path: subPathToAbsolute(subPath, root), source: "deep-link" };
+  }
+  // Guarded here as well as at the caller: `threadWorkspace` reports a path
+  // that sits outside the root rather than hiding it, and §6 forbids opening
+  // one — the panel would redirect to a folder it cannot list.
+  if (workspaceFolder !== null && isInsideRoot(workspaceFolder, root)) {
+    return { path: normalizePath(workspaceFolder), source: "workspace" };
   }
   const fallback: InitialFolderChoice = { path: startFolder, source: "start-folder" };
   if (!restoreLastFolder) return fallback;

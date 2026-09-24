@@ -302,6 +302,19 @@ export const preferencesSchema = z.strictObject({
    * later.
    */
   restoreLastFolder: z.boolean(),
+  /**
+   * Open a thread panel tab in that thread's own project folder — the
+   * environment checkout `threadWorkspace` reports — instead of the
+   * remembered or configured folder (v0.9.1).
+   *
+   * It rides with the other bootstrap-tick preferences for the reason
+   * `restoreLastFolder` documents above: the panel decides where to open in
+   * the tick `getState` lands, and a second async source racing it would
+   * either delay the first listing or open one folder and jump a moment
+   * later. Surfaces bb gives no thread — the nav panel, the New thread
+   * launcher, the file openers — ignore it: there is no thread to be in.
+   */
+  openThreadWorkspace: z.boolean(),
   sortField: sortFieldSchema,
   sortDirection: sortDirectionSchema,
   /**
@@ -917,6 +930,7 @@ export const fileManagerContract = defineRpcContract({
   savePreferences: {
     input: z.strictObject({
       startFolder: z.string().optional(),
+      openThreadWorkspace: z.boolean().optional(),
       showHiddenFiles: z.boolean().optional(),
       confirmOnDelete: z.boolean().optional(),
       sortField: sortFieldSchema.optional(),
